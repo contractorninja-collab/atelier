@@ -59,6 +59,11 @@ export function Sidebar({
           <span className="hide-c">My work</span>
         </Link>
 
+        <Link href="/import" className={`nav-i ${pathname === '/import' ? 'active' : ''}`}>
+          <span className="ic"><Icon name="arrow" size={15} /></span>
+          <span className="hide-c">Import data</span>
+        </Link>
+
         <div className="sb-sec hide-c">Spaces</div>
 
         {SPACES.map((space) => (

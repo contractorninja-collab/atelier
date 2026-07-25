@@ -43,7 +43,15 @@ It is **idempotent**: a second Closed Won on the same deal creates nothing. Dupl
 
 ---
 
+**Import.** A CSV importer at `/import` for companies, contacts and deals. It previews before it writes: how many rows will import, how many will be skipped, and why — including rows that duplicate something already in the database. Deduplicates companies on domain and contacts on email, and can remove the demo data once your real pipeline is in.
+
+**Health check.** `/health` reports which environment variables are missing, whether the database connects, whether migrations ran, and whether anyone is actually able to sign in. Not behind auth, because a diagnostic page you cannot reach until sign-in works is worthless. It never prints a secret.
+
+---
+
 ## Getting it running
+
+**Deploying for the first time? Follow [DEPLOY.md](./DEPLOY.md)** — it is the step-by-step version of everything below, with the exact values to paste.
 
 You need Node 20+ and a Postgres database. Supabase's free tier is the shortest path.
 
