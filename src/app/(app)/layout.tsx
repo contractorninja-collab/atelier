@@ -5,7 +5,7 @@ import { Shell } from '@/components/Shell'
 import { getLookups, getMyProfile } from '@/server/queries'
 import { db } from '@/db'
 import * as t from '@/db/schema'
-import { count } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 import type { TableId } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -36,25 +36,45 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   )
 }
 
+/**
+ * The sidebar badges, in a single round trip.
+ *
+ * This was eight parallel `count(*)` queries, on every navigation, for numbers
+ * that decorate a nav item. On Vercel that was eight connections held at once
+ * per request; when the pooler ran short, the whole layout stalled and took the
+ * page down with it — the request never rendered, it just hung until the
+ * function timed out.
+ *
+ * Subselects make it one connection and one round trip. A failure here now
+ * costs the badges, not the page.
+ */
 async function tableCounts(): Promise<Partial<Record<TableId, number>>> {
-  const [deals, orgs, contacts, activities, products, sources, team, targets] = await Promise.all([
-    db.select({ n: count() }).from(t.deals),
-    db.select({ n: count() }).from(t.organizations),
-    db.select({ n: count() }).from(t.contacts),
-    db.select({ n: count() }).from(t.activities),
-    db.select({ n: count() }).from(t.products),
-    db.select({ n: count() }).from(t.sources),
-    db.select({ n: count() }).from(t.teamMembers),
-    db.select({ n: count() }).from(t.targets),
-  ])
-  return {
-    deals: deals[0].n,
-    organizations: orgs[0].n,
-    contacts: contacts[0].n,
-    activities: activities[0].n,
-    products: products[0].n,
-    sources: sources[0].n,
-    team: team[0].n,
-    targets: targets[0].n,
+  try {
+    const rows = await db.execute<Record<string, number | string>>(sql`
+      select
+        (select count(*) from ${t.deals})         as deals,
+        (select count(*) from ${t.organizations}) as organizations,
+        (select count(*) from ${t.contacts})      as contacts,
+        (select count(*) from ${t.activities})    as activities,
+        (select count(*) from ${t.products})      as products,
+        (select count(*) from ${t.sources})       as sources,
+        (select count(*) from ${t.teamMembers})   as team,
+        (select count(*) from ${t.targets})       as targets
+    `)
+    const row = (rows as unknown as Record<string, number | string>[])[0] ?? {}
+    const n = (key: string) => Number(row[key] ?? 0)
+    return {
+      deals: n('deals'),
+      organizations: n('organizations'),
+      contacts: n('contacts'),
+      activities: n('activities'),
+      products: n('products'),
+      sources: n('sources'),
+      team: n('team'),
+      targets: n('targets'),
+    }
+  } catch (error) {
+    console.error('tableCounts failed; rendering without badges', error)
+    return {}
   }
 }
