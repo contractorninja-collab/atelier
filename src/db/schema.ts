@@ -16,7 +16,8 @@
  * See the specification document for why each table exists.
  */
 import {
-  pgTable, pgEnum, text, integer, boolean, timestamp, date, primaryKey, index, uniqueIndex, serial,
+  pgTable, pgEnum, text, integer, boolean, timestamp, date, primaryKey, index, uniqueIndex,
+  serial, jsonb,
 } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 import type { AdapterAccountType } from 'next-auth/adapters'
@@ -76,7 +77,6 @@ export const targetMetric = pgEnum('target_metric', [
   'NewBusinessTCV', 'NetNewMRR', 'ClosedWonCount', 'BillableUtilization', 'GrossMargin',
 ])
 export const targetScope = pgEnum('target_scope', ['Company', 'Team', 'Individual'])
-export const currency = pgEnum('currency', ['EUR', 'PLN', 'USD', 'GBP'])
 
 /* ----------------------------- Phase 2 enums ----------------------------- */
 
@@ -118,6 +118,19 @@ export const riskCategory = pgEnum('risk_category', ['Risk', 'Issue', 'Dependenc
 export const riskLevel = pgEnum('risk_level', ['Low', 'Medium', 'High'])
 export const riskStatus = pgEnum('risk_status', ['Open', 'Mitigating', 'Closed', 'Accepted'])
 export const allocationConfidence = pgEnum('allocation_confidence', ['Confirmed', 'Tentative'])
+
+/* ----------------------------- Revenue enums ----------------------------- */
+
+/**
+ * Deliberately *not* an invoice status with a Paid member. Whether an invoice is
+ * settled follows from the payments recorded against it, so it is derived in
+ * compute.ts rather than stored — a flag somebody has to remember to flip is how
+ * an aged-debt report ends up lying. Stored here is only what a person decides:
+ * has it gone out, and has it been written off.
+ */
+export const invoiceStatus = pgEnum('invoice_status', ['Draft', 'Sent', 'Void'])
+export const paymentMethod = pgEnum('payment_method', ['Transfer', 'Card', 'DirectDebit', 'Cash', 'Other'])
+export const subscriptionStatus = pgEnum('subscription_status', ['Active', 'Paused', 'Cancelled'])
 
 /* ==========================================================================
  * AUTH (shapes required by @auth/drizzle-adapter — do not rename)
@@ -277,7 +290,13 @@ export const deals = pgTable('deal', {
   motion: dealMotion('motion').notNull().default('NewBusiness'),
   type: dealType('type').notNull().default('Subscription'),
   forecast: forecastCategory('forecast').notNull().default('Pipeline'),
-  currency: currency('currency').notNull().default('EUR'),
+  /**
+   * No currency column. Every money figure in this system is EUR cents, and
+   * `deal.currency` used to say otherwise while `dealMoney` and the € formatter
+   * ignored it entirely — so a PLN deal would have been summed straight into
+   * the EUR pipeline, coverage and margin totals with nothing to flag it.
+   * Removed rather than half-supported; add real FX handling before adding it back.
+   */
   contractMonths: integer('contract_months').notNull().default(12),
   /** Basis points. Null means "use the stage default" — see STAGE_PROBABILITY_BPS. */
   probabilityOverrideBps: integer('probability_override_bps'),
@@ -404,7 +423,7 @@ export const portfolioProducts = pgTable('portfolio_product', {
   status: portfolioStatus('status').notNull().default('Idea'),
   description: text('description'),
   /** Accent colour used in the UI so each product is recognisable at a glance. */
-  color: text('color').notNull().default('#0e9f6e'),
+  color: text('color').notNull().default('#1c8c5a'),
   ownerId: text('owner_id').references(() => teamMembers.id, { onDelete: 'set null' }),
   launchedAt: date('launched_at'),
   repoUrl: text('repo_url'),
@@ -609,13 +628,24 @@ export const timeEntries = pgTable('time_entry', {
    */
   costRateCents: integer('cost_rate_cents').notNull().default(0),
   billRateCents: integer('bill_rate_cents').notNull().default(0),
-  invoiced: boolean('invoiced').notNull().default(false),
+  /**
+   * Which invoice billed these hours — not a boolean saying that some invoice
+   * did, once, probably.
+   *
+   * `invoiced` used to be a flag nothing ever set. Storing the link instead means
+   * you can see which invoice covered which hours, and voiding that invoice
+   * releases them back to billable without anything having to remember to. The
+   * derived "is this billed" lives in compute.ts, because a void invoice bills
+   * nothing.
+   */
+  invoiceId: text('invoice_id'),
   notes: text('notes'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [
   index('time_entry_member_idx').on(t.teamMemberId),
   index('time_entry_project_idx').on(t.projectId),
   index('time_entry_date_idx').on(t.workedOn),
+  index('time_entry_invoice_idx').on(t.invoiceId),
 ])
 
 export const allocations = pgTable('allocation', {
@@ -658,6 +688,8 @@ export const organizationRelations = relations(organizations, ({ one, many }) =>
   deals: many(deals),
   activities: many(activities),
   projects: many(projects),
+  subscriptions: many(subscriptions),
+  invoices: many(invoices),
 }))
 
 export const sourceRelations = relations(sources, ({ many }) => ({
@@ -756,6 +788,7 @@ export const projectRelations = relations(projects, ({ one, many }) => ({
   allocations: many(allocations),
   changeRequests: many(changeRequests),
   risks: many(risks),
+  invoices: many(invoices),
 }))
 
 export const milestoneRelations = relations(milestones, ({ one, many }) => ({
@@ -785,6 +818,7 @@ export const timeEntryRelations = relations(timeEntries, ({ one }) => ({
   teamMember: one(teamMembers, { fields: [timeEntries.teamMemberId], references: [teamMembers.id] }),
   task: one(tasks, { fields: [timeEntries.taskId], references: [tasks.id] }),
   project: one(projects, { fields: [timeEntries.projectId], references: [projects.id] }),
+  invoice: one(invoices, { fields: [timeEntries.invoiceId], references: [invoices.id] }),
 }))
 
 export const allocationRelations = relations(allocations, ({ one }) => ({
@@ -797,6 +831,149 @@ export const allocationRelations = relations(allocations, ({ one }) => ({
 
 export const absenceRelations = relations(absences, ({ one }) => ({
   teamMember: one(teamMembers, { fields: [absences.teamMemberId], references: [teamMembers.id] }),
+}))
+
+/* ==========================================================================
+ * GROUP I — REVENUE
+ *
+ * The layer that was missing between "what we sold" and "what it cost to
+ * build": what we actually billed, what came back, and what is still running.
+ *
+ * Without it the system could compute TCV and delivery cost but could not
+ * answer "who owes us money" — and `milestone.invoice_amount_cents` and
+ * `time_entry.invoiced` were both pointing at a record that did not exist.
+ * ========================================================================== */
+
+export const subscriptions = pgTable('subscription', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  seq: serial('seq').notNull(),
+  organizationId: text('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  /** Which of our products they are actually on. */
+  portfolioProductId: text('portfolio_product_id').references(() => portfolioProducts.id, { onDelete: 'set null' }),
+  /** The deal that created it, so won revenue and running revenue reconcile. */
+  dealId: text('deal_id').references(() => deals.id, { onDelete: 'set null' }),
+
+  status: subscriptionStatus('status').notNull().default('Active'),
+  startDate: date('start_date').notNull(),
+  termMonths: integer('term_months').notNull().default(12),
+  /**
+   * Stored rather than derived from start + term, because it moves forward on
+   * every renewal. Deriving it would make a five-year-old customer look
+   * permanently overdue for their first renewal.
+   */
+  renewsOn: date('renews_on').notNull(),
+  endedOn: date('ended_on'),
+  autoRenew: boolean('auto_renew').notNull().default(true),
+
+  mrrCents: integer('mrr_cents').notNull().default(0),
+  billing: billingFreq('billing').notNull().default('Monthly'),
+
+  cancelReason: text('cancel_reason'),
+  notes: text('notes'),
+  ownerId: text('owner_id').references(() => teamMembers.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [
+  index('subscription_org_idx').on(t.organizationId),
+  index('subscription_status_idx').on(t.status),
+  index('subscription_renews_idx').on(t.renewsOn),
+])
+
+export const invoices = pgTable('invoice', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  seq: serial('seq').notNull(),
+  /** Human reference — what the client quotes back at you. */
+  number: text('number').notNull().unique(),
+  organizationId: text('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  projectId: text('project_id').references(() => projects.id, { onDelete: 'set null' }),
+  subscriptionId: text('subscription_id').references(() => subscriptions.id, { onDelete: 'set null' }),
+  /** Set when this invoice is the one a payment-trigger milestone called for. */
+  milestoneId: text('milestone_id').references(() => milestones.id, { onDelete: 'set null' }),
+
+  status: invoiceStatus('status').notNull().default('Draft'),
+  issueDate: date('issue_date').notNull(),
+  /** Everything about aged debt hangs off this one column. */
+  dueDate: date('due_date').notNull(),
+
+  /** Net. Tax is separate so the outstanding figure is gross and unambiguous. */
+  amountCents: integer('amount_cents').notNull().default(0),
+  taxCents: integer('tax_cents').notNull().default(0),
+
+  notes: text('notes'),
+  ownerId: text('owner_id').references(() => teamMembers.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [
+  index('invoice_org_idx').on(t.organizationId),
+  index('invoice_due_idx').on(t.dueDate),
+  index('invoice_status_idx').on(t.status),
+])
+
+export const payments = pgTable('payment', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  seq: serial('seq').notNull(),
+  invoiceId: text('invoice_id').notNull().references(() => invoices.id, { onDelete: 'cascade' }),
+  paidOn: date('paid_on').notNull(),
+  amountCents: integer('amount_cents').notNull(),
+  method: paymentMethod('method').notNull().default('Transfer'),
+  reference: text('reference'),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('payment_invoice_idx').on(t.invoiceId)])
+
+/**
+ * What was changed, by whom, and what it looked like before.
+ *
+ * Deletion here is a hard DELETE — there is no `deleted_at` on twenty-two tables
+ * and no undo stack. This is the recovery path: `before` holds the complete row
+ * as JSON, so a mistaken delete can be reconstructed, and "who removed the
+ * Nordwind invoice" has an answer that is not "nobody knows".
+ *
+ * Append-only. Nothing in the app updates or deletes a row here.
+ */
+export const auditLog = pgTable('audit_log', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  seq: serial('seq').notNull(),
+  at: timestamp('at').notNull().defaultNow(),
+  /** Null only if the actor's Team row was itself removed afterwards. */
+  actorMemberId: text('actor_member_id').references(() => teamMembers.id, { onDelete: 'set null' }),
+  actorEmail: text('actor_email'),
+  action: text('action').notNull(),
+  /** The UI's table id — 'invoices', 'deals' — not the Postgres table name. */
+  tableId: text('table_id').notNull(),
+  rowId: text('row_id').notNull(),
+  before: jsonb('before'),
+  after: jsonb('after'),
+}, (t) => [
+  index('audit_log_at_idx').on(t.at),
+  index('audit_log_row_idx').on(t.tableId, t.rowId),
+])
+
+export const auditLogRelations = relations(auditLog, ({ one }) => ({
+  actor: one(teamMembers, { fields: [auditLog.actorMemberId], references: [teamMembers.id] }),
+}))
+
+export const subscriptionRelations = relations(subscriptions, ({ one, many }) => ({
+  organization: one(organizations, { fields: [subscriptions.organizationId], references: [organizations.id] }),
+  portfolioProduct: one(portfolioProducts, {
+    fields: [subscriptions.portfolioProductId], references: [portfolioProducts.id],
+  }),
+  deal: one(deals, { fields: [subscriptions.dealId], references: [deals.id] }),
+  owner: one(teamMembers, { fields: [subscriptions.ownerId], references: [teamMembers.id] }),
+  invoices: many(invoices),
+}))
+
+export const invoiceRelations = relations(invoices, ({ one, many }) => ({
+  organization: one(organizations, { fields: [invoices.organizationId], references: [organizations.id] }),
+  project: one(projects, { fields: [invoices.projectId], references: [projects.id] }),
+  subscription: one(subscriptions, { fields: [invoices.subscriptionId], references: [subscriptions.id] }),
+  milestone: one(milestones, { fields: [invoices.milestoneId], references: [milestones.id] }),
+  owner: one(teamMembers, { fields: [invoices.ownerId], references: [teamMembers.id] }),
+  payments: many(payments),
+}))
+
+export const paymentRelations = relations(payments, ({ one }) => ({
+  invoice: one(invoices, { fields: [payments.invoiceId], references: [invoices.id] }),
 }))
 
 export const changeRequestRelations = relations(changeRequests, ({ one }) => ({
@@ -823,3 +1000,6 @@ export type Milestone = typeof milestones.$inferSelect
 export type Task = typeof tasks.$inferSelect
 export type Sprint = typeof sprints.$inferSelect
 export type TimeEntry = typeof timeEntries.$inferSelect
+export type Subscription = typeof subscriptions.$inferSelect
+export type Invoice = typeof invoices.$inferSelect
+export type Payment = typeof payments.$inferSelect

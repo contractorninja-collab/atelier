@@ -53,6 +53,9 @@ async function main() {
   await db.delete(s.sprints)
   await db.delete(s.projects)
   await db.delete(s.portfolioProducts)
+  await db.delete(s.payments)
+  await db.delete(s.invoices)
+  await db.delete(s.subscriptions)
   await db.delete(s.dealStageHistory)
   await db.delete(s.dealLineItems)
   await db.delete(s.dealContacts)
@@ -295,7 +298,7 @@ async function main() {
   console.log('Portfolio…')
   const folio = await db.insert(s.portfolioProducts).values([
     {
-      name: 'PagaPRO', slug: 'pagapro', status: 'Live', ownerId: florian, color: '#0e9f6e',
+      name: 'PagaPRO', slug: 'pagapro', status: 'Live', ownerId: florian, color: '#1c8c5a',
       description: 'Merchant payments, onboarding and payouts. The house product.',
       launchedAt: inDays(-420), repoUrl: 'https://github.com/your-org/pagapro',
     },
@@ -541,6 +544,94 @@ async function main() {
       mitigation: 'Pair Jakub onto the payout engine from the next sprint and write the mandate handling up as a doc.',
       raisedDate: inDays(-6), targetDate: inDays(30),
     },
+  ])
+
+  /* ----------------------------------------------------------- revenue */
+
+  console.log('Subscriptions…')
+  const pf = (n: string) => folio.find((p) => p.name.startsWith(n))!.id
+  const subs = await db.insert(s.subscriptions).values([
+    {
+      organizationId: org('Nordwind'), portfolioProductId: pf('PagaPRO'), status: 'Active',
+      startDate: inDays(-400), termMonths: 12, renewsOn: inDays(-35), autoRenew: true,
+      mrrCents: euros(1_450), billing: 'Monthly', ownerId: marta,
+      notes: 'Renewal date has passed with no contact — the case this view exists to catch.',
+    },
+    {
+      organizationId: org('Café Milano'), portfolioProductId: pf('PagaPRO'), status: 'Active',
+      startDate: inDays(-320), termMonths: 12, renewsOn: inDays(45), autoRenew: true,
+      mrrCents: euros(320), billing: 'Monthly', ownerId: luca,
+    },
+    {
+      organizationId: org('Bergström'), portfolioProductId: pf('PagaPRO'), status: 'Active',
+      startDate: inDays(-210), termMonths: 24, renewsOn: inDays(520), autoRenew: true,
+      mrrCents: euros(890), billing: 'Monthly', ownerId: luca,
+    },
+    {
+      organizationId: org('Delta Foods'), portfolioProductId: pf('PagaPRO'), status: 'Active',
+      startDate: inDays(-150), termMonths: 12, renewsOn: inDays(215), autoRenew: true,
+      mrrCents: euros(240), billing: 'Monthly', ownerId: luca,
+    },
+    {
+      organizationId: org('Kwiat'), portfolioProductId: pf('PagaPRO'), status: 'Cancelled',
+      startDate: inDays(-540), termMonths: 12, renewsOn: inDays(-175), endedOn: inDays(-175),
+      autoRenew: false, mrrCents: 0, billing: 'Monthly', ownerId: luca,
+      cancelReason: 'Studio closed the retail side of the business.',
+    },
+  ]).returning()
+  const sub = (n: string) => subs.find((x) => x.organizationId === org(n))?.id ?? null
+
+  console.log('Invoices & payments…')
+  // Spread across the aging buckets on purpose: a receivables view that only
+  // ever shows "Current" teaches you nothing about whether it works.
+  const invoices = await db.insert(s.invoices).values([
+    {
+      number: 'INV-2026-041', organizationId: org('Nordwind'), projectId: prj('Nordwind'),
+      status: 'Sent', issueDate: inDays(-96), dueDate: inDays(-66),
+      amountCents: euros(18_000), taxCents: euros(4_140), ownerId: marta,
+      notes: 'Chased twice. Client says it is with their finance team.',
+    },
+    {
+      number: 'INV-2026-047', organizationId: org('Nordwind'), subscriptionId: sub('Nordwind'),
+      status: 'Sent', issueDate: inDays(-52), dueDate: inDays(-22),
+      amountCents: euros(1_450), taxCents: euros(333), ownerId: marta,
+    },
+    {
+      number: 'INV-2026-052', organizationId: org('Café Milano'), projectId: prj('Café Milano'),
+      status: 'Sent', issueDate: inDays(-40), dueDate: inDays(-10),
+      amountCents: euros(6_500), taxCents: euros(1_495), ownerId: luca,
+    },
+    {
+      number: 'INV-2026-055', organizationId: org('Bergström'), subscriptionId: sub('Bergström'),
+      status: 'Sent', issueDate: inDays(-30), dueDate: inDays(0),
+      amountCents: euros(890), taxCents: euros(205), ownerId: luca,
+    },
+    {
+      number: 'INV-2026-058', organizationId: org('Delta Foods'), subscriptionId: sub('Delta'),
+      status: 'Sent', issueDate: inDays(-14), dueDate: inDays(16),
+      amountCents: euros(240), taxCents: euros(55), ownerId: luca,
+    },
+    {
+      number: 'INV-2026-060', organizationId: org('Café Milano'), subscriptionId: sub('Café Milano'),
+      status: 'Draft', issueDate: inDays(-2), dueDate: inDays(28),
+      amountCents: euros(320), taxCents: euros(74), ownerId: luca,
+      notes: 'Not posted yet — waiting on the extra training hours to be confirmed.',
+    },
+    {
+      number: 'INV-2026-033', organizationId: org('Bergström'), projectId: prj('Café Milano'),
+      status: 'Void', issueDate: inDays(-120), dueDate: inDays(-90),
+      amountCents: euros(2_000), taxCents: euros(460), ownerId: luca,
+      notes: 'Raised against the wrong account. Reissued as INV-2026-034.',
+    },
+  ]).returning()
+  const inv = (n: string) => invoices.find((i) => i.number === n)!.id
+
+  await db.insert(s.payments).values([
+    // Settled in full, on time.
+    { invoiceId: inv('INV-2026-055'), paidOn: inDays(-3), amountCents: euros(1_095), method: 'Transfer', reference: 'SEB-88412' },
+    // Part payment against a debt that is already late — outstanding, not settled.
+    { invoiceId: inv('INV-2026-052'), paidOn: inDays(-5), amountCents: euros(3_000), method: 'Transfer', reference: 'INTESA-2291' },
+    { invoiceId: inv('INV-2026-047'), paidOn: inDays(-1), amountCents: euros(500), method: 'Card', reference: 'STRIPE-ch_2Kd' },
   ])
 
   console.log(`\nDone. Sign in as ${FOUNDER_EMAIL}.`)

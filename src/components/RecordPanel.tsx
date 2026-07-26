@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { Icon, FIELD_ICON } from './Icon'
 import { Cell } from './Cell'
 import { SpaceDot } from './ui'
@@ -73,6 +74,12 @@ export function RecordPanel({ config, row, lookups, onClose, onChange, onOpenRec
                 <button className={`over-tab ${tab === 'related' ? 'active' : ''}`} onClick={() => setTab('related')}>
                   Related
                 </button>
+                {/* A project has a page of its own; the panel is the summary. */}
+                {config.id === 'projects' ? (
+                  <Link className="over-open" href={`/project/${row.id}`}>
+                    Open project <Icon name="arrow" size={12} />
+                  </Link>
+                ) : null}
               </div>
             </div>
 

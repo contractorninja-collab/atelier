@@ -13,10 +13,10 @@ const C = {
   slate: '#64748b',
   sky: '#3b93e0',
   violet: '#7c6cf0',
-  amber: '#e0a020',
+  amber: '#e2a63a',
   orange: '#d97757',
-  green: '#0e9f6e',
-  rose: '#e2597a',
+  green: '#1c8c5a',
+  rose: '#c2415f',
   teal: '#12a5a5',
 } as const
 
@@ -229,6 +229,96 @@ const TARGET_SCOPE = opts(
   ['Individual', 'Individual', C.teal],
 )
 
+/**
+ * What a target's `value` column actually holds, per metric — money in cents,
+ * percentages in basis points, everything else a plain count. The same three
+ * storage rules as the rest of the schema.
+ *
+ * One definition because three places have to agree about the unit: the create
+ * form (which asks for euros or percent), the write (which converts), and the
+ * grid (which formats it back). They disagreed silently before this existed.
+ */
+export const TARGET_METRIC_UNIT: Record<string, 'money' | 'percent' | 'count'> = {
+  NewBusinessTCV: 'money',
+  NetNewMRR: 'money',
+  ClosedWonCount: 'count',
+  BillableUtilization: 'percent',
+  GrossMargin: 'percent',
+}
+
+/** Accepts a quarter ("2026-Q3") or a month ("2026-07"), matching the column's comment. */
+export const TARGET_PERIOD_PATTERN = /^\d{4}-(Q[1-4]|0[1-9]|1[0-2])$/
+
+/* --------------------------------------------------------------- revenue */
+
+export const INVOICE_STATUS = opts(
+  ['Draft', 'Draft', C.gray],
+  ['Sent', 'Sent', C.sky],
+  ['Void', 'Void', C.slate],
+)
+
+/** Derived states, for rendering the computed column as a pill. */
+export const INVOICE_STATE = opts(
+  ['Draft', 'Draft', C.gray],
+  ['Sent', 'Sent', C.sky],
+  ['Part paid', 'Part paid', C.amber],
+  ['Paid', 'Paid', C.green],
+  ['Overdue', 'Overdue', C.rose],
+  ['Void', 'Void', C.slate],
+)
+
+export const AGING_BUCKET = opts(
+  ['Current', 'Current', C.green],
+  ['1–30', '1–30 days', C.amber],
+  ['31–60', '31–60 days', C.orange],
+  ['61–90', '61–90 days', C.rose],
+  ['90+', '90+ days', C.rose],
+)
+
+export const PAYMENT_METHOD = opts(
+  ['Transfer', 'Bank transfer', C.sky],
+  ['Card', 'Card', C.violet],
+  ['DirectDebit', 'Direct debit', C.teal],
+  ['Cash', 'Cash', C.gray],
+  ['Other', 'Other', C.slate],
+)
+
+export const SUBSCRIPTION_STATUS = opts(
+  ['Active', 'Active', C.green],
+  ['Paused', 'Paused', C.amber],
+  ['Cancelled', 'Cancelled', C.rose],
+)
+
+export const ACCOUNT_TEMPERATURE = opts(
+  ['AtRisk', 'At risk', C.rose],
+  ['Hot', 'Hot', C.orange],
+  ['Warm', 'Warm', C.amber],
+  ['Cold', 'Cold', C.slate],
+)
+
+/**
+ * The thresholds behind an account's temperature, in one place so the grid, the
+ * board and the dashboard cannot come to different conclusions about the same
+ * customer — the same reason every other derived number lives in compute.ts.
+ *
+ * These are judgement calls, not laws. They are here to be argued with and
+ * changed in one edit.
+ */
+export const HEALTH_RULES = {
+  /** Spoken to this recently and something is moving — worth your attention today. */
+  hotActivityDays: 14,
+  /** Beyond this with no contact at all, the relationship has gone quiet. */
+  warmActivityDays: 45,
+  /** A renewal this close counts as active business, not background. */
+  renewalSoonDays: 60,
+  /** This close with no recent contact is a churn risk, not a renewal. */
+  renewalUrgentDays: 30,
+  /** Debt older than this stops being an admin oversight. */
+  overdueRiskDays: 30,
+  /** Stages late enough that the account is genuinely in play. */
+  lateStages: ['Proposal', 'Negotiation'] as readonly string[],
+}
+
 /* ------------------------------------------------------ Phase 2 options */
 
 const PORTFOLIO_STATUS = opts(
@@ -286,6 +376,11 @@ const MILESTONE_STATUS = opts(
   ['Delivered', 'Delivered', C.sky],
   ['Accepted', 'Accepted', C.green],
   ['Cancelled', 'Cancelled', C.slate],
+)
+
+/** The same colours, keyed for places that render a dot rather than a pill. */
+export const MILESTONE_STATUS_COLOUR: Record<string, string> = Object.fromEntries(
+  MILESTONE_STATUS.map((o) => [o.value, o.color]),
 )
 
 const TASK_TYPE = opts(
@@ -409,12 +504,13 @@ export const MILESTONE_TEMPLATE: {
 /* ----------------------------------------------------------------- spaces */
 
 export const SPACES = [
-  { id: 'sales', name: 'Sales', color: '#0e9f6e', abbr: 'S', tables: ['deals', 'organizations', 'contacts', 'activities'] },
+  { id: 'sales', name: 'Sales', color: '#1c8c5a', abbr: 'S', tables: ['deals', 'organizations', 'contacts', 'activities'] },
+  { id: 'revenue', name: 'Revenue', color: '#0f9b8e', abbr: 'R', tables: ['clients', 'subscriptions', 'invoices', 'payments'] },
   { id: 'portfolio', name: 'Portfolio', color: '#8b5cf6', abbr: 'P', tables: ['portfolio', 'tasks', 'sprints'] },
   { id: 'delivery', name: 'Delivery', color: '#d97757', abbr: 'D', tables: ['projects', 'milestones', 'changeRequests', 'risks'] },
   { id: 'capacity', name: 'Capacity', color: '#3b93e0', abbr: 'C', tables: ['timeEntries', 'allocations', 'absences'] },
   { id: 'catalogue', name: 'Catalogue', color: '#e0a020', abbr: 'K', tables: ['products', 'sources'] },
-  { id: 'people', name: 'People & Targets', color: '#12a5a5', abbr: 'T', tables: ['team', 'targets'] },
+  { id: 'people', name: 'People & Targets', color: '#12a5a5', abbr: 'T', tables: ['team', 'targets', 'audit'] },
 ] as const
 
 /* ----------------------------------------------------------------- tables */
@@ -425,7 +521,7 @@ const PHASE_1: Partial<Record<TableId, TableConfig>> = {
     name: 'Deals',
     singular: 'deal',
     icon: 'euro',
-    color: '#0e9f6e',
+    color: '#1c8c5a',
     space: 'sales',
     views: [
       { id: 'board', name: 'Pipeline', type: 'board', icon: 'board', groupBy: 'stage', sumBy: 'tcv' },
@@ -832,7 +928,8 @@ const PHASE_2: Partial<Record<TableId, TableConfig>> = {
       { id: 'billable', label: 'Billable', type: 'check', width: 96 },
       { id: 'revenueCents', label: 'Value', type: 'currency', width: 110, computed: true },
       { id: 'costCents', label: 'Cost', type: 'currency', width: 110, computed: true },
-      { id: 'invoiced', label: 'Invoiced', type: 'check', width: 100 },
+      { id: 'invoiced', label: 'Invoiced', type: 'check', width: 100, computed: true },
+      { id: 'invoiceId', label: 'Invoice', type: 'link', width: 150, linkTo: 'invoices', computed: true },
       { id: 'notes', label: 'Notes', type: 'text', width: 260, secondary: true },
     ],
   },
@@ -931,7 +1028,169 @@ const PHASE_2: Partial<Record<TableId, TableConfig>> = {
   },
 }
 
-export const TABLES = { ...PHASE_1, ...PHASE_2 } as Record<TableId, TableConfig>
+/* ------------------------------------------------------- Revenue tables */
+
+const REVENUE: Partial<Record<TableId, TableConfig>> = {
+  /**
+   * Clients is a view of organizations, not a table of its own — a customer is
+   * an organization that reached the Customer lifecycle. Giving it a separate
+   * table would mean two rows for the same company, drifting apart the first
+   * time somebody corrects a name in one of them.
+   */
+  clients: {
+    id: 'clients',
+    name: 'Clients',
+    singular: 'client',
+    icon: 'users',
+    color: '#0f9b8e',
+    space: 'revenue',
+    views: [
+      { id: 'grid', name: 'All clients', type: 'grid', icon: 'grid' },
+      { id: 'board', name: 'By temperature', type: 'board', icon: 'board', groupBy: 'temperature', sumBy: 'mrr' },
+    ],
+    fields: [
+      { id: 'name', label: 'Client', type: 'text', width: 200, primary: true },
+      { id: 'temperature', label: 'Temperature', type: 'select', width: 128, options: ACCOUNT_TEMPERATURE, computed: true },
+      { id: 'healthNote', label: 'Why', type: 'text', width: 230, computed: true },
+      { id: 'mrr', label: 'MRR', type: 'currency', width: 110, computed: true },
+      { id: 'subscriptionStatus', label: 'Subscription', type: 'select', width: 128, options: SUBSCRIPTION_STATUS, computed: true },
+      { id: 'renewsOn', label: 'Renews', type: 'date', width: 116, computed: true },
+      { id: 'outstanding', label: 'Outstanding', type: 'currency', width: 124, computed: true },
+      { id: 'overdue', label: 'Overdue', type: 'currency', width: 116, computed: true },
+      { id: 'oldestOverdueDays', label: 'Oldest debt', type: 'number', width: 118, computed: true },
+      { id: 'lastActivity', label: 'Last contact', type: 'date', width: 122, computed: true },
+      { id: 'openPipeline', label: 'Open pipeline', type: 'currency', width: 128, computed: true },
+      { id: 'ownerId', label: 'Owner', type: 'user', width: 150, linkTo: 'team' },
+      { id: 'segment', label: 'Segment', type: 'select', width: 124, options: SEGMENT, secondary: true },
+      { id: 'domain', label: 'Domain', type: 'text', width: 170, secondary: true },
+      { id: 'notes', label: 'Notes', type: 'longtext', width: 240, secondary: true },
+    ],
+  },
+
+  subscriptions: {
+    id: 'subscriptions',
+    name: 'Subscriptions',
+    singular: 'subscription',
+    icon: 'clock',
+    color: '#12a5a5',
+    space: 'revenue',
+    views: [
+      { id: 'grid', name: 'All subscriptions', type: 'grid', icon: 'grid' },
+      { id: 'board', name: 'By status', type: 'board', icon: 'board', groupBy: 'status', sumBy: 'mrrCents' },
+      {
+        id: 'timeline', name: 'Renewals', type: 'timeline', icon: 'timeline',
+        startField: 'startDate', endField: 'renewsOn', colorField: 'status', labelField: 'status',
+      },
+    ],
+    fields: [
+      { id: 'organizationId', label: 'Client', type: 'link', width: 200, linkTo: 'organizations', primary: true },
+      { id: 'status', label: 'Status', type: 'select', width: 118, options: SUBSCRIPTION_STATUS },
+      { id: 'portfolioProductId', label: 'Product', type: 'link', width: 150, linkTo: 'portfolio' },
+      { id: 'mrrCents', label: 'MRR', type: 'currency', width: 110 },
+      { id: 'renewsOn', label: 'Renews', type: 'date', width: 116 },
+      { id: 'daysToRenewal', label: 'In days', type: 'number', width: 100, computed: true },
+      { id: 'arrCents', label: 'ARR', type: 'currency', width: 116, computed: true },
+      { id: 'termMonths', label: 'Term', type: 'number', width: 96 },
+      { id: 'autoRenew', label: 'Auto-renew', type: 'check', width: 118 },
+      { id: 'startDate', label: 'Started', type: 'date', width: 112 },
+      { id: 'billing', label: 'Billing', type: 'select', width: 116, options: BILLING, secondary: true },
+      { id: 'dealId', label: 'Source deal', type: 'link', width: 220, linkTo: 'deals', secondary: true },
+      { id: 'ownerId', label: 'Owner', type: 'user', width: 150, linkTo: 'team', secondary: true },
+      { id: 'endedOn', label: 'Ended', type: 'date', width: 112, secondary: true },
+      { id: 'cancelReason', label: 'Cancel reason', type: 'text', width: 200, secondary: true },
+      { id: 'notes', label: 'Notes', type: 'longtext', width: 240, secondary: true },
+    ],
+  },
+
+  invoices: {
+    id: 'invoices',
+    name: 'Invoices',
+    singular: 'invoice',
+    icon: 'euro',
+    color: '#e0a020',
+    space: 'revenue',
+    views: [
+      { id: 'grid', name: 'All invoices', type: 'grid', icon: 'grid' },
+      { id: 'board', name: 'By state', type: 'board', icon: 'board', groupBy: 'state', sumBy: 'outstandingCents' },
+      {
+        id: 'timeline', name: 'Due dates', type: 'timeline', icon: 'timeline',
+        startField: 'issueDate', endField: 'dueDate', colorField: 'state', labelField: 'state',
+      },
+    ],
+    fields: [
+      { id: 'number', label: 'Invoice', type: 'text', width: 140, primary: true },
+      { id: 'organizationId', label: 'Client', type: 'link', width: 190, linkTo: 'organizations' },
+      { id: 'state', label: 'State', type: 'select', width: 118, options: INVOICE_STATE, computed: true },
+      { id: 'totalCents', label: 'Total', type: 'currency', width: 116, computed: true },
+      { id: 'paidCents', label: 'Paid', type: 'currency', width: 110, computed: true },
+      { id: 'outstandingCents', label: 'Outstanding', type: 'currency', width: 124, computed: true },
+      { id: 'dueDate', label: 'Due', type: 'date', width: 112 },
+      { id: 'daysOverdue', label: 'Days late', type: 'number', width: 108, computed: true },
+      { id: 'agingBucket', label: 'Aging', type: 'select', width: 116, options: AGING_BUCKET, computed: true },
+      { id: 'status', label: 'Posted', type: 'select', width: 110, options: INVOICE_STATUS },
+      { id: 'issueDate', label: 'Issued', type: 'date', width: 112, secondary: true },
+      { id: 'amountCents', label: 'Net', type: 'currency', width: 110, secondary: true },
+      { id: 'taxCents', label: 'Tax', type: 'currency', width: 104, secondary: true },
+      { id: 'projectId', label: 'Project', type: 'link', width: 220, linkTo: 'projects', secondary: true },
+      { id: 'subscriptionId', label: 'Subscription', type: 'link', width: 200, linkTo: 'subscriptions', secondary: true },
+      { id: 'milestoneId', label: 'Milestone', type: 'link', width: 220, linkTo: 'milestones', secondary: true },
+      { id: 'ownerId', label: 'Owner', type: 'user', width: 150, linkTo: 'team', secondary: true },
+      { id: 'notes', label: 'Notes', type: 'longtext', width: 240, secondary: true },
+    ],
+  },
+
+  payments: {
+    id: 'payments',
+    name: 'Payments',
+    singular: 'payment',
+    icon: 'check',
+    color: '#1c8c5a',
+    space: 'revenue',
+    views: [
+      { id: 'grid', name: 'All payments', type: 'grid', icon: 'grid' },
+      {
+        id: 'timeline', name: 'Received', type: 'timeline', icon: 'timeline',
+        startField: 'paidOn', endField: 'paidOn', colorField: 'method', labelField: 'method',
+      },
+    ],
+    fields: [
+      { id: 'invoiceId', label: 'Invoice', type: 'link', width: 160, linkTo: 'invoices', primary: true },
+      { id: 'client', label: 'Client', type: 'text', width: 190, computed: true },
+      { id: 'amountCents', label: 'Amount', type: 'currency', width: 120 },
+      { id: 'paidOn', label: 'Received', type: 'date', width: 116 },
+      { id: 'method', label: 'Method', type: 'select', width: 140, options: PAYMENT_METHOD },
+      { id: 'reference', label: 'Reference', type: 'text', width: 180 },
+      { id: 'notes', label: 'Notes', type: 'longtext', width: 240, secondary: true },
+    ],
+  },
+}
+
+/**
+ * The audit log, read-only and admin-only. Every field is computed so the grid
+ * refuses to edit any of it — an audit trail you can edit is not one.
+ */
+const AUDIT: Partial<Record<TableId, TableConfig>> = {
+  audit: {
+    id: 'audit',
+    name: 'Audit log',
+    singular: 'entry',
+    icon: 'clock',
+    color: '#64748b',
+    space: 'people',
+    views: [{ id: 'grid', name: 'Recent changes', type: 'grid', icon: 'grid' }],
+    fields: [
+      { id: 'at', label: 'When', type: 'date', width: 120, primary: true, computed: true },
+      { id: 'actor', label: 'Who', type: 'text', width: 190, computed: true },
+      { id: 'action', label: 'Action', type: 'text', width: 100, computed: true },
+      { id: 'tableId', label: 'Table', type: 'text', width: 140, computed: true },
+      { id: 'summary', label: 'Record', type: 'text', width: 300, computed: true },
+      { id: 'rowId', label: 'Row id', type: 'text', width: 280, computed: true, secondary: true },
+      { id: 'payload', label: 'Full row', type: 'longtext', width: 400, computed: true, secondary: true },
+    ],
+  },
+}
+
+export const TABLES = { ...PHASE_1, ...PHASE_2, ...REVENUE, ...AUDIT } as Record<TableId, TableConfig>
 
 /** Deals gained a portfolio link in Phase 2. */
 TABLES.deals.fields.splice(

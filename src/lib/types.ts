@@ -72,6 +72,12 @@ export type TableId =
   | 'absences'
   | 'changeRequests'
   | 'risks'
+  // Revenue — what we billed, what came back, what is still running
+  | 'clients'
+  | 'subscriptions'
+  | 'invoices'
+  | 'payments'
+  | 'audit'
 
 export type TableConfig = {
   id: TableId

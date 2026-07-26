@@ -11,15 +11,18 @@ type Props = {
   rows: Row[]
   rowHeight: number
   selected: Set<string>
-  onToggleSelect: (id: string) => void
+  onToggleSelect: (id: string, event: React.MouseEvent | React.KeyboardEvent) => void
+  onToggleAll: () => void
   onOpen: (id: string) => void
   onEditCell: (event: React.MouseEvent, row: Row, field: Field) => void
   onAdd: () => void
 }
 
 export function GridView({
-  config, fields, rows, rowHeight, selected, onToggleSelect, onOpen, onEditCell, onAdd,
+  config, fields, rows, rowHeight, selected, onToggleSelect, onToggleAll, onOpen, onEditCell, onAdd,
 }: Props) {
+  const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id))
+  const someSelected = rows.some((r) => selected.has(r.id))
   const width = (f: Field) => ({ flex: `0 0 ${f.width}px`, width: f.width })
 
   const summary = fields.map((f) => {
@@ -43,7 +46,19 @@ export function GridView({
   return (
     <div className="grid-wrap">
       <div className="grow head">
-        <div className="gcell gutter" />
+        <div className="gcell gutter">
+          <span
+            className={`cbx head ${allSelected ? 'on' : someSelected ? 'part' : ''}`}
+            onClick={onToggleAll}
+            role="checkbox"
+            aria-checked={allSelected ? 'true' : someSelected ? 'mixed' : 'false'}
+            aria-label={allSelected ? 'Clear selection' : 'Select all rows'}
+            tabIndex={0}
+            onKeyDown={(e) => e.key === 'Enter' && onToggleAll()}
+          >
+            {allSelected ? <Icon name="check" size={9} /> : someSelected ? <span className="dash" /> : null}
+          </span>
+        </div>
         {fields.map((f) => (
           <div key={f.id} className={`gcell ${f.primary ? 'pri' : ''}`} style={width(f)}>
             <span className="ftype"><Icon name={FIELD_ICON[f.type] ?? 'text'} size={12} /></span>
@@ -65,11 +80,11 @@ export function GridView({
             <span className="rn">{i + 1}</span>
             <span
               className={`cbx ${selected.has(row.id) ? 'on' : ''}`}
-              onClick={() => onToggleSelect(row.id)}
+              onClick={(e) => onToggleSelect(row.id, e)}
               role="checkbox"
               aria-checked={selected.has(row.id)}
               tabIndex={0}
-              onKeyDown={(e) => e.key === 'Enter' && onToggleSelect(row.id)}
+              onKeyDown={(e) => e.key === 'Enter' && onToggleSelect(row.id, e)}
             >
               {selected.has(row.id) ? <Icon name="check" size={9} /> : null}
             </span>

@@ -1,39 +1,50 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { signOut } from 'next-auth/react'
 import { Icon } from './Icon'
 import { Avatar, SpaceDot } from './ui'
+import { Mark } from './Mark'
+import { UserMenu } from './UserMenu'
+import { usePrefs } from './Prefs'
 import { SPACES, TABLES } from '@/lib/tables'
+import { resolveTheme } from '@/lib/prefs'
+import type { SettingsSection } from './SettingsDialog'
+import type { MyProfile } from '@/server/queries'
 import type { TableId } from '@/lib/types'
 
 export function Sidebar({
-  counts, memberName, onOpenPalette,
+  counts, memberName, profile, onOpenPalette, onOpenSettings,
 }: {
   counts: Partial<Record<TableId, number>>
   memberName: string
+  profile: MyProfile | null
   onOpenPalette: () => void
+  onOpenSettings: (section: SettingsSection) => void
 }) {
   const pathname = usePathname()
+  const { prefs, set, ready } = usePrefs()
   const [collapsed, setCollapsed] = useState(false)
   const [open, setOpen] = useState<string[]>(['sales'])
-  const [dark, setDark] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  // The stored preference is the starting state, not a lock: collapsing the
+  // sidebar for one screen should not rewrite the default.
+  useEffect(() => {
+    if (ready) setCollapsed(prefs.sidebarCollapsed)
+  }, [ready, prefs.sidebarCollapsed])
 
   const toggleSpace = (id: string) =>
     setOpen((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
 
-  const toggleTheme = () => {
-    const next = !dark
-    setDark(next)
-    document.documentElement.setAttribute('data-theme', next ? 'dark' : 'light')
-  }
+  const dark = resolveTheme(prefs.theme) === 'dark'
+  const toggleTheme = () => set('theme', dark ? 'light' : 'dark')
 
   return (
     <aside className={`sb ${collapsed ? 'collapsed' : ''}`}>
       <div className="ws">
-        <div className="ws-mark">A</div>
+        <div className="ws-mark"><Mark size={18} variant="onBrand" /></div>
         <div className="hide-c" style={{ minWidth: 0 }}>
           <div className="ws-name">Atelier</div>
           <div className="ws-plan">Workspace</div>
@@ -93,19 +104,34 @@ export function Sidebar({
       </div>
 
       <div className="sb-foot">
-        <Avatar name={memberName} size={24} />
-        <div className="nm hide-c">{memberName}</div>
         <button
-          className="icon-btn hide-c"
-          style={{ marginLeft: 'auto' }}
-          onClick={() => signOut({ callbackUrl: '/login' })}
-          title="Sign out"
+          className="sb-me"
+          onClick={() => setMenuOpen((v) => !v)}
+          title="Profile and settings"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
         >
-          <Icon name="logout" size={15} />
+          <Avatar name={memberName} size={24} />
+          <span className="nm hide-c">{memberName}</span>
+          <span className="hide-c" style={{ marginLeft: 'auto', color: 'var(--nav-ink-2)' }}>
+            <Icon name="chev" size={13} />
+          </span>
         </button>
         <button className="icon-btn" onClick={() => setCollapsed((c) => !c)} title="Collapse sidebar">
           <Icon name="panelL" size={15} />
         </button>
+
+        {menuOpen ? (
+          <UserMenu
+            profile={profile}
+            memberName={memberName}
+            onClose={() => setMenuOpen(false)}
+            onOpenSettings={(section) => {
+              setMenuOpen(false)
+              onOpenSettings(section)
+            }}
+          />
+        ) : null}
       </div>
     </aside>
   )

@@ -1,6 +1,8 @@
 import { sql } from 'drizzle-orm'
 import { db } from '@/db'
 import * as t from '@/db/schema'
+import { Mark } from '@/components/Mark'
+import { BRAND } from '@/lib/brand'
 
 export const dynamic = 'force-dynamic'
 
@@ -130,7 +132,7 @@ export default async function HealthPage() {
   const failing = checks.filter((c) => c.state === 'fail').length
   const warning = checks.filter((c) => c.state === 'warn').length
 
-  const colour = { ok: '#0e9f6e', warn: '#e0a020', fail: '#e2597a' }
+  const colour = { ok: BRAND.success, warn: BRAND.saffron, fail: BRAND.danger }
   const mark = { ok: '✓', warn: '!', fail: '✕' }
 
   return (
@@ -140,7 +142,9 @@ export default async function HealthPage() {
         borderRadius: 14, padding: 30,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-          <div className="ws-mark" style={{ width: 34, height: 34, flexBasis: 34, fontSize: 15, borderRadius: 10 }}>A</div>
+          <div className="ws-mark" style={{ width: 34, height: 34, flexBasis: 34, borderRadius: 10 }}>
+            <Mark size={22} variant="onBrand" />
+          </div>
           <h1 style={{ fontSize: 20, fontWeight: 680, letterSpacing: '-0.02em', margin: 0 }}>Atelier — deployment check</h1>
         </div>
         <p style={{ color: 'var(--ink-2)', fontSize: 13, margin: '0 0 24px', lineHeight: 1.6 }}>

@@ -2,7 +2,7 @@
  * Derived values. Kept in one file so the grid, the board, the record panel
  * and the dashboard can never disagree about what "TCV" means.
  */
-import { STAGE_DAY_LIMIT, STAGE_PROBABILITY_BPS, INACTIVE_STAGES } from '@/lib/tables'
+import { HEALTH_RULES, STAGE_DAY_LIMIT, STAGE_PROBABILITY_BPS, INACTIVE_STAGES } from '@/lib/tables'
 import { daysBetween } from '@/lib/format'
 
 export type LineItemLike = {
@@ -241,4 +241,297 @@ export const OPEN_TASK_STATUSES = ['Backlog', 'Ready', 'InProgress', 'InReview',
 
 export function isOpenTask(status: string): boolean {
   return (OPEN_TASK_STATUSES as readonly string[]).includes(status)
+}
+
+/* ==========================================================================
+ * REVENUE — receivables, subscriptions and account health
+ * ========================================================================== */
+
+export type InvoiceState = {
+  totalCents: number
+  paidCents: number
+  outstandingCents: number
+  /** Draft | Sent | Part paid | Paid | Overdue | Void — derived, never stored. */
+  state: string
+  /** Positive only once past the due date and still owing. */
+  daysOverdue: number
+  /** Current | 1–30 | 31–60 | 61–90 | 90+ — blank once settled. */
+  agingBucket: string
+}
+
+export const AGING_BUCKETS = ['Current', '1–30', '31–60', '61–90', '90+'] as const
+
+/**
+ * What an invoice is actually worth to you today.
+ *
+ * "Paid" is not a column. It is the sum of the payment rows against this
+ * invoice, compared to what was billed. Storing it as a flag means the day
+ * someone forgets to tick it, the aged-debt report quietly under-reports and
+ * nobody finds out until a client is chased for money they already sent.
+ *
+ * Void invoices are worth nothing and are never overdue — a written-off debt
+ * that keeps ageing would inflate receivables forever.
+ */
+export function invoiceState(
+  invoice: { status: string; dueDate: string; amountCents: number; taxCents: number },
+  payments: { amountCents: number }[],
+  today = new Date().toISOString().slice(0, 10),
+): InvoiceState {
+  const totalCents = invoice.amountCents + invoice.taxCents
+  const paidCents = payments.reduce((sum, p) => sum + p.amountCents, 0)
+  const outstandingCents = Math.max(0, totalCents - paidCents)
+
+  if (invoice.status === 'Void') {
+    return { totalCents, paidCents, outstandingCents: 0, state: 'Void', daysOverdue: 0, agingBucket: '' }
+  }
+  if (outstandingCents === 0 && totalCents > 0) {
+    return { totalCents, paidCents, outstandingCents: 0, state: 'Paid', daysOverdue: 0, agingBucket: '' }
+  }
+  if (invoice.status === 'Draft') {
+    return { totalCents, paidCents, outstandingCents, state: 'Draft', daysOverdue: 0, agingBucket: '' }
+  }
+
+  // Only a sent invoice can be late; a draft nobody posted is our failing, not theirs.
+  const daysOverdue = invoice.dueDate < today ? daysBetween(invoice.dueDate, today) : 0
+  const partPaid = paidCents > 0
+
+  return {
+    totalCents,
+    paidCents,
+    outstandingCents,
+    state: daysOverdue > 0 ? 'Overdue' : partPaid ? 'Part paid' : 'Sent',
+    daysOverdue,
+    agingBucket: agingBucket(daysOverdue),
+  }
+}
+
+export function agingBucket(daysOverdue: number): string {
+  if (daysOverdue <= 0) return 'Current'
+  if (daysOverdue <= 30) return '1–30'
+  if (daysOverdue <= 60) return '31–60'
+  if (daysOverdue <= 90) return '61–90'
+  return '90+'
+}
+
+/** Days until a subscription renews. Negative once the date has passed. */
+export function daysUntilRenewal(renewsOn: string, today = new Date().toISOString().slice(0, 10)): number {
+  return daysBetween(today, renewsOn)
+}
+
+/**
+ * Add whole months to an ISO date, clamping to the end of the target month.
+ *
+ * Written by hand rather than with `Date.setMonth`, which overflows: 31 January
+ * plus one month gives 3 March, so a subscription that renews on the 31st would
+ * walk forward a few days every year until it drifted into the next month.
+ * The 31st plus one month is the 28th (or 29th) here.
+ */
+export function addMonths(iso: string, months: number): string {
+  const [year, month, day] = iso.split('-').map(Number)
+  const index = month - 1 + months
+  const targetYear = year + Math.floor(index / 12)
+  const targetMonth = ((index % 12) + 12) % 12
+
+  // Day 0 of the following month is the last day of this one.
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate()
+  const targetDay = Math.min(day, lastDay)
+
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${targetYear}-${pad(targetMonth + 1)}-${pad(targetDay)}`
+}
+
+/**
+ * The next renewal date after this one.
+ *
+ * Counted from the existing renewal date, never from today. Renewing a month
+ * late must not move the anniversary a month later — do that a few years running
+ * and a January contract renews in April.
+ */
+export function nextRenewalDate(renewsOn: string, termMonths: number): string {
+  return addMonths(renewsOn, Math.max(1, termMonths))
+}
+
+export type AccountHealth = {
+  /** AtRisk | Hot | Warm | Cold */
+  temperature: string
+  /** Why, in the order that matters. First entry is the headline. */
+  reasons: string[]
+  daysSinceActivity: number | null
+}
+
+/**
+ * How warm an account is.
+ *
+ * Deliberately explainable rather than a black-box score: it returns the reasons
+ * alongside the verdict, because "Cold" without "nobody has spoken to them since
+ * March" is not an insight, it is a colour.
+ *
+ * At risk is checked first and wins outright. A customer who owes you money for
+ * two months, or whose delivery is red, is not "warm" just because you happened
+ * to email them on Tuesday — and that is exactly the case where a naive recency
+ * score reads healthiest right before the relationship ends.
+ */
+export function accountHealth(input: {
+  lastActivityAt: string | null
+  openDeals: { stage: string }[]
+  maxDaysOverdue: number
+  overdueCents: number
+  daysToRenewal: number | null
+  hasRedProject: boolean
+  hasActiveSubscription: boolean
+  today?: string
+}): AccountHealth {
+  const today = input.today ?? new Date().toISOString().slice(0, 10)
+  const daysSinceActivity = input.lastActivityAt ? daysBetween(input.lastActivityAt, today) : null
+  const quiet = daysSinceActivity === null || daysSinceActivity > HEALTH_RULES.warmActivityDays
+
+  const reasons: string[] = []
+
+  if (input.maxDaysOverdue > HEALTH_RULES.overdueRiskDays) {
+    reasons.push(`${input.maxDaysOverdue} days overdue`)
+  }
+  if (input.hasRedProject) reasons.push('Delivery is red')
+  if (
+    input.hasActiveSubscription &&
+    input.daysToRenewal !== null &&
+    input.daysToRenewal <= HEALTH_RULES.renewalUrgentDays &&
+    quiet
+  ) {
+    reasons.push(
+      input.daysToRenewal < 0
+        ? `Renewal ${Math.abs(input.daysToRenewal)} days past due`
+        : `Renews in ${input.daysToRenewal} days, no recent contact`,
+    )
+  }
+  if (reasons.length > 0) return { temperature: 'AtRisk', reasons, daysSinceActivity }
+
+  const inPlay = input.openDeals.some((d) => HEALTH_RULES.lateStages.includes(d.stage))
+  const renewalSoon =
+    input.hasActiveSubscription &&
+    input.daysToRenewal !== null &&
+    input.daysToRenewal <= HEALTH_RULES.renewalSoonDays
+
+  if (daysSinceActivity !== null && daysSinceActivity <= HEALTH_RULES.hotActivityDays && (inPlay || renewalSoon)) {
+    reasons.push(inPlay ? 'Live deal in a late stage' : 'Renewal approaching')
+    reasons.push(`Spoke ${daysSinceActivity} days ago`)
+    return { temperature: 'Hot', reasons, daysSinceActivity }
+  }
+
+  if (!quiet) {
+    reasons.push(`Spoke ${daysSinceActivity} days ago`)
+    return { temperature: 'Warm', reasons, daysSinceActivity }
+  }
+
+  reasons.push(
+    daysSinceActivity === null
+      ? 'No activity ever logged'
+      : `No contact for ${daysSinceActivity} days`,
+  )
+  return { temperature: 'Cold', reasons, daysSinceActivity }
+}
+
+export type ProjectFinancials = {
+  contractValueCents: number
+  /** Everything billed that has not been written off. */
+  invoicedCents: number
+  collectedCents: number
+  outstandingCents: number
+  overdueCents: number
+  /** Contract value not yet billed. Negative means the project is over-billed. */
+  uninvoicedCents: number
+  internalCostCents: number
+  /** Margin on what was sold. The number the deal promised. */
+  contractedMarginBps: number | null
+  /** Margin on what actually arrived. The number the bank agrees with. */
+  collectedMarginBps: number | null
+}
+
+/**
+ * The money on one project, from both ends.
+ *
+ * Two margins because they answer different questions and a project can look
+ * healthy on one while failing the other. Contracted margin is what the deal
+ * promised; collected margin is what the bank agrees with. A project sold at 40%
+ * whose client has not paid is not a 40% project yet, and reporting only the
+ * first is how a studio runs out of cash while its dashboard stays green.
+ *
+ * Void invoices are excluded throughout — a written-off bill was never revenue.
+ */
+export function projectFinancials(input: {
+  contractValueCents: number
+  internalCostCents: number
+  invoices: {
+    status: string
+    dueDate: string
+    amountCents: number
+    taxCents: number
+    payments: { amountCents: number }[]
+  }[]
+  today?: string
+}): ProjectFinancials {
+  const today = input.today ?? new Date().toISOString().slice(0, 10)
+  const states = input.invoices.map((i) => ({ invoice: i, state: invoiceState(i, i.payments, today) }))
+  const live = states.filter((s) => s.state.state !== 'Void')
+
+  const invoicedCents = live.reduce((sum, s) => sum + s.state.totalCents, 0)
+  const collectedCents = live.reduce((sum, s) => sum + s.state.paidCents, 0)
+  const outstandingCents = live.reduce((sum, s) => sum + s.state.outstandingCents, 0)
+  const overdueCents = live.reduce(
+    (sum, s) => sum + (s.state.state === 'Overdue' ? s.state.outstandingCents : 0),
+    0,
+  )
+
+  const bps = (numerator: number, denominator: number) =>
+    denominator > 0 ? Math.round((numerator / denominator) * 10_000) : null
+
+  return {
+    contractValueCents: input.contractValueCents,
+    invoicedCents,
+    collectedCents,
+    outstandingCents,
+    overdueCents,
+    uninvoicedCents: input.contractValueCents - invoicedCents,
+    internalCostCents: input.internalCostCents,
+    contractedMarginBps: bps(input.contractValueCents - input.internalCostCents, input.contractValueCents),
+    collectedMarginBps: bps(collectedCents - input.internalCostCents, collectedCents),
+  }
+}
+
+/* -------------------------------------------------------- invoice numbers */
+
+const INVOICE_NUMBER_PATTERN = /^INV-(\d{4})-(\d+)$/
+
+export function formatInvoiceNumber(year: number, sequence: number): string {
+  return `INV-${year}-${String(sequence).padStart(3, '0')}`
+}
+
+/**
+ * The next invoice number for a year, given the ones already issued.
+ *
+ * Numbering restarts each year and only ever counts up, including over gaps: a
+ * voided INV-2026-042 does not free the number for reuse. Two invoices sharing a
+ * reference is the kind of thing an accountant finds a year later.
+ *
+ * Anything not matching `INV-YYYY-NNN` is ignored rather than guessed at, so a
+ * hand-typed reference cannot drag the sequence somewhere strange.
+ */
+export function nextInvoiceNumber(existing: string[], year: number): string {
+  const highest = existing.reduce((max, number) => {
+    const match = INVOICE_NUMBER_PATTERN.exec(number)
+    if (!match || Number(match[1]) !== year) return max
+    return Math.max(max, Number(match[2]))
+  }, 0)
+  return formatInvoiceNumber(year, highest + 1)
+}
+
+/**
+ * Have these hours actually been billed?
+ *
+ * The link alone is not enough: an invoice that was voided billed nothing, so its
+ * hours must return to billable. Deriving this rather than storing a flag is what
+ * makes voiding an invoice self-correcting — there is nothing to remember to undo.
+ */
+export function timeIsInvoiced(link: { invoiceId: string | null; invoiceStatus?: string | null }): boolean {
+  if (!link.invoiceId) return false
+  return link.invoiceStatus !== 'Void'
 }

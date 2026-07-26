@@ -87,7 +87,7 @@ export function Cell({ field, value }: { field: Field; value: CellValue }) {
 
     case 'progress': {
       const pct = typeof value === 'number' ? Math.min(Math.max(value, 0), 1.2) : 0
-      const color = pct > 1 ? '#e2597a' : pct > 0.85 ? '#e0a020' : '#0e9f6e'
+      const color = pct > 1 ? 'var(--danger)' : pct > 0.85 ? 'var(--accent)' : 'var(--brand)'
       return (
         <span className="bar-wrap">
           <span className="bar">

@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation'
 import { SessionProvider } from 'next-auth/react'
 import { auth } from '@/auth'
 import { Shell } from '@/components/Shell'
-import { getLookups } from '@/server/queries'
+import { getLookups, getMyProfile } from '@/server/queries'
 import { db } from '@/db'
 import * as t from '@/db/schema'
 import { count } from 'drizzle-orm'
@@ -14,11 +14,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const session = await auth()
   if (!session?.user) redirect('/login')
 
-  const [lookups, counts] = await Promise.all([getLookups(), tableCounts()])
+  const [lookups, counts, profile] = await Promise.all([
+    getLookups(),
+    tableCounts(),
+    // Null when the signed-in address has no Team row — the settings dialog says
+    // so rather than rendering a form that cannot save.
+    session.user.memberId ? getMyProfile(session.user.memberId) : Promise.resolve(null),
+  ])
 
   return (
     <SessionProvider session={session}>
-      <Shell counts={counts} memberName={session.user.memberName} index={lookups}>
+      <Shell
+        counts={counts}
+        memberName={session.user.memberName}
+        profile={profile}
+        index={lookups}
+      >
         {children}
       </Shell>
     </SessionProvider>

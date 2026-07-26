@@ -1,13 +1,17 @@
 import 'server-only'
-import { desc, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { db } from '@/db'
 import * as t from '@/db/schema'
 import type { LinkRef, Row, TableId } from '@/lib/types'
 import {
-  budgetWarning, cycleTimeDays, dealMoney, hygieneFlag, isOpenStage, isOpenTask,
-  projectRollup, qualificationScore, riskSeverity,
+  accountHealth, budgetWarning, cycleTimeDays, daysUntilRenewal, dealMoney, hygieneFlag,
+  invoiceState, isOpenStage, isOpenTask, projectFinancials, projectRollup, qualificationScore,
+  riskSeverity, timeIsInvoiced,
 } from './compute'
 import { daysBetween } from '@/lib/format'
+import { TARGET_METRIC_UNIT } from '@/lib/tables'
+import { canRead, canSeeCost } from '@/lib/permissions'
+import { auth } from '@/auth'
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null)
 const ref = (table: TableId, id: string | null | undefined, label: string | null | undefined): LinkRef | null =>
@@ -262,21 +266,25 @@ async function targetRows(): Promise<Row[]> {
     with: { teamMember: { columns: { id: true, name: true } } },
     orderBy: [desc(t.targets.period)],
   })
-  const moneyMetrics = ['NewBusinessTCV', 'NetNewMRR']
-  const pctMetrics = ['BillableUtilization', 'GrossMargin']
-  return rows.map((x): Row => ({
-    id: x.id,
-    period: x.period,
-    metric: x.metric,
-    scope: x.scope,
-    value: x.value,
-    teamMemberId: ref('team', x.teamMember?.id, x.teamMember?.name),
-    displayValue: moneyMetrics.includes(x.metric)
-      ? `€${Math.round(x.value / 100).toLocaleString('en-IE')}`
-      : pctMetrics.includes(x.metric)
-        ? `${x.value / 100}%`
-        : String(x.value),
-  }))
+  return rows.map((x): Row => {
+    // The unit lives in tables.ts so the create form, the write and this
+    // formatter cannot disagree about what `value` means.
+    const unit = TARGET_METRIC_UNIT[x.metric] ?? 'count'
+    return {
+      id: x.id,
+      period: x.period,
+      metric: x.metric,
+      scope: x.scope,
+      value: x.value,
+      teamMemberId: ref('team', x.teamMember?.id, x.teamMember?.name),
+      displayValue:
+        unit === 'money'
+          ? `€${Math.round(x.value / 100).toLocaleString('en-IE')}`
+          : unit === 'percent'
+            ? `${x.value / 100}%`
+            : String(x.value),
+    }
+  })
 }
 
 /* ==========================================================================
@@ -512,6 +520,7 @@ async function timeEntryRows(): Promise<Row[]> {
       teamMember: { columns: { id: true, name: true } },
       project: { columns: { id: true, name: true } },
       task: { columns: { id: true, title: true } },
+      invoice: { columns: { id: true, number: true, status: true } },
     },
     orderBy: [desc(t.timeEntries.workedOn)],
     limit: 500,
@@ -528,7 +537,8 @@ async function timeEntryRows(): Promise<Row[]> {
     billable: e.billable,
     costCents: Math.round((e.minutes / 60) * e.costRateCents),
     revenueCents: e.billable ? Math.round((e.minutes / 60) * e.billRateCents) : 0,
-    invoiced: e.invoiced,
+    invoiced: timeIsInvoiced({ invoiceId: e.invoiceId, invoiceStatus: e.invoice?.status }),
+    invoiceId: ref('invoices', e.invoice?.id, e.invoice?.number),
     notes: e.notes,
   }))
 }
@@ -652,15 +662,55 @@ const LOADERS: Record<TableId, () => Promise<Row[]>> = {
   absences: absenceRows,
   changeRequests: changeRequestRows,
   risks: riskRows,
+  clients: clientRows,
+  subscriptions: subscriptionRows,
+  invoices: invoiceRows,
+  payments: paymentRows,
+  audit: auditRows,
 }
 
-export function getRows(table: TableId): Promise<Row[]> {
-  return LOADERS[table]()
+/**
+ * Fields that expose what people cost, per table.
+ *
+ * Some are direct (`costCents`), others are arithmetic away from it: margin is
+ * (contract − cost) / contract and contract is on the same row, so publishing
+ * the margin publishes the cost. Contribution is the same trick with won value.
+ */
+const COST_FIELDS: Partial<Record<TableId, string[]>> = {
+  timeEntries: ['costCents', 'revenueCents'],
+  projects: ['internalCostCents', 'marginBps'],
+  portfolio: ['buildCost', 'contribution'],
+}
+
+/**
+ * The one door every grid comes through.
+ *
+ * Redaction happens here rather than in each loader so a loader added later
+ * cannot forget, and server-side rather than in the components because hiding a
+ * column in the config still ships the numbers in the payload.
+ */
+export async function getRows(table: TableId): Promise<Row[]> {
+  const session = await auth()
+  const role = session?.user?.role ?? null
+
+  // Refuse before loading, not after: the cheapest query is the one not run.
+  if (!canRead(role, table)) return []
+
+  const rows = await LOADERS[table]()
+  if (canSeeCost(role)) return rows
+
+  const hidden = COST_FIELDS[table]
+  if (!hidden) return rows
+  return rows.map((row) => {
+    const copy = { ...row }
+    for (const field of hidden) delete copy[field]
+    return copy
+  })
 }
 
 /** Options for link and user pickers in the record panel. */
 export async function getLookups(): Promise<Record<string, { id: string; label: string }[]>> {
-  const [orgs, people, members, srcs, dls, folio, projs, miles, sprnts, tsks] = await Promise.all([
+  const [orgs, people, members, srcs, dls, folio, projs, miles, sprnts, tsks, invs, subs] = await Promise.all([
     db.select({ id: t.organizations.id, label: t.organizations.name }).from(t.organizations).orderBy(t.organizations.name),
     db.select({ id: t.contacts.id, first: t.contacts.firstName, last: t.contacts.lastName }).from(t.contacts),
     db.select({ id: t.teamMembers.id, label: t.teamMembers.name }).from(t.teamMembers).orderBy(t.teamMembers.name),
@@ -672,6 +722,11 @@ export async function getLookups(): Promise<Record<string, { id: string; label: 
     db.select({ id: t.milestones.id, label: t.milestones.name }).from(t.milestones).orderBy(t.milestones.name),
     db.select({ id: t.sprints.id, label: t.sprints.name }).from(t.sprints).orderBy(desc(t.sprints.startDate)),
     db.select({ id: t.tasks.id, label: t.tasks.title }).from(t.tasks).orderBy(t.tasks.title),
+    db.select({ id: t.invoices.id, label: t.invoices.number }).from(t.invoices).orderBy(desc(t.invoices.number)),
+    db.select({ id: t.subscriptions.id, label: t.organizations.name })
+      .from(t.subscriptions)
+      .innerJoin(t.organizations, eq(t.subscriptions.organizationId, t.organizations.id))
+      .orderBy(t.organizations.name),
   ])
   return {
     organizations: orgs,
@@ -684,6 +739,8 @@ export async function getLookups(): Promise<Record<string, { id: string; label: 
     milestones: miles,
     sprints: sprnts,
     tasks: tsks,
+    invoices: invs,
+    subscriptions: subs,
   }
 }
 
@@ -727,6 +784,37 @@ export async function getDashboard() {
     .slice(0, 8)
     .map((d) => ({ id: d.id, name: d.name, flag: d.flag, valueCents: d.money.tcvCents }))
 
+  // Receivables and renewals: the two questions the pipeline half of this
+  // dashboard could never answer.
+  const [invoiceList, subscriptionList] = await Promise.all([
+    db.query.invoices.findMany({
+      with: {
+        organization: { columns: { name: true } },
+        payments: { columns: { amountCents: true } },
+      },
+    }),
+    db.query.subscriptions.findMany({
+      where: eq(t.subscriptions.status, 'Active'),
+      with: { organization: { columns: { name: true } } },
+    }),
+  ])
+
+  const invoiceStates = invoiceList.map((i) => ({ invoice: i, state: invoiceState(i, i.payments) }))
+  const overdueList = invoiceStates
+    .filter((x) => x.state.state === 'Overdue')
+    .sort((a, b) => b.state.daysOverdue - a.state.daysOverdue)
+
+  const renewals = subscriptionList
+    .map((s) => ({
+      id: s.id,
+      org: s.organization?.name ?? '',
+      renewsOn: s.renewsOn,
+      days: daysUntilRenewal(s.renewsOn),
+      mrrCents: s.mrrCents,
+    }))
+    .filter((r) => r.days <= 90)
+    .sort((a, b) => a.days - b.days)
+
   return {
     openPipelineCents: open.reduce((s, d) => s + d.money.tcvCents, 0),
     weightedCents: weighted,
@@ -740,6 +828,22 @@ export async function getDashboard() {
     coverage: quarterTarget > 0 ? weighted / quarterTarget : null,
     byStage,
     attention,
+    /** Live subscription revenue, as opposed to MRR inferred from won deals. */
+    activeMrrCents: subscriptionList.reduce((s, x) => s + x.mrrCents, 0),
+    outstandingCents: invoiceStates.reduce((s, x) => s + x.state.outstandingCents, 0),
+    overdueCents: overdueList.reduce((s, x) => s + x.state.outstandingCents, 0),
+    overdueCount: overdueList.length,
+    oldestOverdueDays: overdueList[0]?.state.daysOverdue ?? 0,
+    overdue: overdueList.slice(0, 5).map((x) => ({
+      id: x.invoice.id,
+      number: x.invoice.number,
+      org: x.invoice.organization?.name ?? '',
+      outstandingCents: x.state.outstandingCents,
+      daysOverdue: x.state.daysOverdue,
+      bucket: x.state.agingBucket,
+    })),
+    renewals: renewals.slice(0, 5),
+    renewalCount: renewals.length,
     recent: acts.map((a) => ({
       id: a.id,
       subject: a.subject,
@@ -755,6 +859,9 @@ export async function getDashboard() {
  * going, and is each product earning more than it costs to build.
  */
 export async function getDelivery() {
+  const session = await auth()
+  const showCost = canSeeCost(session?.user?.role ?? null)
+
   const [projectList, taskList, riskList, folio, allocationList, absenceList, members] = await Promise.all([
     db.query.projects.findMany({
       with: {
@@ -851,6 +958,12 @@ export async function getDelivery() {
       project: r.project?.name ?? '',
       severity: riskSeverity(r.probability, r.impact),
     })).sort((a, b) => b.severity - a.severity),
+    /**
+     * `showCost` gates the delivery-cost half of the portfolio bars and the
+     * contribution figure — both are derived from hourly cost rates, so
+     * publishing them to the whole team publishes what everyone is paid.
+     */
+    showCost,
     portfolio: folio
       .map((p) => ({
         id: String(p.id),
@@ -858,11 +971,11 @@ export async function getDelivery() {
         status: String(p.status),
         won: Number(p.wonValue ?? 0),
         pipeline: Number(p.pipelineValue ?? 0),
-        cost: Number(p.buildCost ?? 0),
-        contribution: Number(p.contribution ?? 0),
+        cost: showCost ? Number(p.buildCost ?? 0) : 0,
+        contribution: showCost ? Number(p.contribution ?? 0) : 0,
         openTasks: Number(p.openTasks ?? 0),
       }))
-      .sort((a, b) => b.contribution - a.contribution),
+      .sort((a, b) => (showCost ? b.contribution - a.contribution : b.won - a.won)),
     weekStarting: mondayISO,
     capacity,
     overAllocated: capacity.filter((c) => (c.loadBps ?? 0) > 10_000).length,
@@ -910,3 +1023,442 @@ export async function getMyWork(memberId: string | null) {
     })),
   }
 }
+
+/**
+ * The signed-in member's own Team row, for the settings dialog.
+ *
+ * Deliberately narrow: no cost or bill rate. Those are on the Team table behind
+ * spec section 10's warning, and a settings screen is the last place they should
+ * leak into.
+ */
+export async function getMyProfile(memberId: string) {
+  const member = await db.query.teamMembers.findFirst({
+    where: eq(t.teamMembers.id, memberId),
+    columns: {
+      id: true, name: true, email: true, role: true, department: true, status: true,
+      weeklyCapacityHours: true, timezone: true, squad: true, startDate: true,
+    },
+  })
+  return member ?? null
+}
+
+export type MyProfile = NonNullable<Awaited<ReturnType<typeof getMyProfile>>>
+
+/* ==========================================================================
+ * REVENUE LOADERS
+ * ========================================================================== */
+
+async function subscriptionRows(): Promise<Row[]> {
+  const rows = await db.query.subscriptions.findMany({
+    with: {
+      organization: { columns: { id: true, name: true } },
+      portfolioProduct: { columns: { id: true, name: true } },
+      deal: { columns: { id: true, name: true } },
+      owner: { columns: { id: true, name: true } },
+    },
+    orderBy: [t.subscriptions.renewsOn],
+  })
+
+  return rows.map((s): Row => ({
+    id: s.id,
+    organizationId: ref('organizations', s.organization?.id, s.organization?.name),
+    status: s.status,
+    portfolioProductId: ref('portfolio', s.portfolioProduct?.id, s.portfolioProduct?.name),
+    mrrCents: s.mrrCents,
+    renewsOn: s.renewsOn,
+    // Only meaningful while it is running — a cancelled subscription counting
+    // down to a renewal it will never reach is noise on the renewals timeline.
+    daysToRenewal: s.status === 'Active' ? daysUntilRenewal(s.renewsOn) : null,
+    arrCents: s.mrrCents * 12,
+    termMonths: s.termMonths,
+    autoRenew: s.autoRenew,
+    startDate: s.startDate,
+    billing: s.billing,
+    dealId: ref('deals', s.deal?.id, s.deal?.name),
+    ownerId: ref('team', s.owner?.id, s.owner?.name),
+    endedOn: s.endedOn,
+    cancelReason: s.cancelReason,
+    notes: s.notes,
+  }))
+}
+
+async function invoiceRows(): Promise<Row[]> {
+  const rows = await db.query.invoices.findMany({
+    with: {
+      organization: { columns: { id: true, name: true } },
+      project: { columns: { id: true, name: true } },
+      subscription: { columns: { id: true }, with: { organization: { columns: { name: true } } } },
+      milestone: { columns: { id: true, name: true } },
+      owner: { columns: { id: true, name: true } },
+      payments: { columns: { amountCents: true } },
+    },
+    orderBy: [desc(t.invoices.issueDate)],
+  })
+
+  return rows.map((i): Row => {
+    const state = invoiceState(i, i.payments)
+    return {
+      id: i.id,
+      number: i.number,
+      organizationId: ref('organizations', i.organization?.id, i.organization?.name),
+      state: state.state,
+      totalCents: state.totalCents,
+      paidCents: state.paidCents,
+      outstandingCents: state.outstandingCents,
+      dueDate: i.dueDate,
+      daysOverdue: state.daysOverdue || null,
+      agingBucket: state.agingBucket || null,
+      status: i.status,
+      issueDate: i.issueDate,
+      amountCents: i.amountCents,
+      taxCents: i.taxCents,
+      projectId: ref('projects', i.project?.id, i.project?.name),
+      subscriptionId: ref('subscriptions', i.subscription?.id, i.subscription?.organization?.name),
+      milestoneId: ref('milestones', i.milestone?.id, i.milestone?.name),
+      ownerId: ref('team', i.owner?.id, i.owner?.name),
+      notes: i.notes,
+    }
+  })
+}
+
+async function paymentRows(): Promise<Row[]> {
+  const rows = await db.query.payments.findMany({
+    with: {
+      invoice: {
+        columns: { id: true, number: true },
+        with: { organization: { columns: { name: true } } },
+      },
+    },
+    orderBy: [desc(t.payments.paidOn)],
+  })
+
+  return rows.map((p): Row => ({
+    id: p.id,
+    invoiceId: ref('invoices', p.invoice?.id, p.invoice?.number),
+    client: p.invoice?.organization?.name ?? '',
+    amountCents: p.amountCents,
+    paidOn: p.paidOn,
+    method: p.method,
+    reference: p.reference,
+    notes: p.notes,
+  }))
+}
+
+/**
+ * The client cockpit: one row per customer, pulling together what they pay us,
+ * what they owe us, and how warm the relationship is.
+ *
+ * Restricted to organizations that have actually reached Customer — a Clients
+ * list that includes leads is just the Organizations grid with extra columns.
+ */
+async function clientRows(): Promise<Row[]> {
+  const rows = await db.query.organizations.findMany({
+    with: {
+      owner: { columns: { id: true, name: true } },
+      deals: { columns: { stage: true, contractMonths: true, probabilityOverrideBps: true },
+        with: { lineItems: { columns: { quantity: true, unitPriceCents: true, discountBps: true, billing: true } } } },
+      activities: { columns: { occurredAt: true } },
+      projects: { columns: { health: true, status: true } },
+      subscriptions: true,
+      invoices: { with: { payments: { columns: { amountCents: true } } } },
+    },
+    orderBy: [t.organizations.name],
+  })
+
+  return rows
+    .filter((o) => o.lifecycle === 'Customer' || o.types.includes('Customer') || o.subscriptions.length > 0)
+    .map((o): Row => {
+      const open = o.deals.filter((d) => isOpenStage(d.stage))
+      const lastActivity = o.activities.reduce<Date | null>(
+        (acc, a) => (!acc || a.occurredAt > acc ? a.occurredAt : acc),
+        null,
+      )
+
+      const live = o.subscriptions.filter((s) => s.status === 'Active')
+      const mrr = live.reduce((sum, s) => sum + s.mrrCents, 0)
+      // The soonest renewal is the one that matters; a client on three plans is
+      // at risk on the first date, not the average of them.
+      const nextRenewal = live.map((s) => s.renewsOn).sort()[0] ?? null
+
+      const states = o.invoices.map((i) => invoiceState(i, i.payments))
+      const outstanding = states.reduce((sum, s) => sum + s.outstandingCents, 0)
+      const overdue = states.reduce((sum, s) => sum + (s.state === 'Overdue' ? s.outstandingCents : 0), 0)
+      const maxDaysOverdue = states.reduce((max, s) => Math.max(max, s.daysOverdue), 0)
+
+      const health = accountHealth({
+        lastActivityAt: iso(lastActivity),
+        openDeals: open,
+        maxDaysOverdue,
+        overdueCents: overdue,
+        daysToRenewal: nextRenewal ? daysUntilRenewal(nextRenewal) : null,
+        hasRedProject: o.projects.some((p) => p.health === 'Red' && p.status !== 'Closed' && p.status !== 'Cancelled'),
+        hasActiveSubscription: live.length > 0,
+      })
+
+      return {
+        id: o.id,
+        name: o.name,
+        temperature: health.temperature,
+        healthNote: health.reasons.join(' · '),
+        mrr,
+        subscriptionStatus: live.length > 0
+          ? 'Active'
+          : o.subscriptions.some((s) => s.status === 'Paused')
+            ? 'Paused'
+            : o.subscriptions.length > 0
+              ? 'Cancelled'
+              : null,
+        renewsOn: nextRenewal,
+        outstanding,
+        overdue,
+        oldestOverdueDays: maxDaysOverdue || null,
+        lastActivity: iso(lastActivity),
+        openPipeline: open.reduce((sum, d) => sum + dealMoney(d).tcvCents, 0),
+        ownerId: ref('team', o.owner?.id, o.owner?.name),
+        segment: o.segment,
+        domain: o.domain,
+        notes: o.notes,
+      }
+    })
+}
+
+/**
+ * The audit log, most recent first.
+ *
+ * `summary` picks whatever human-readable field the vanished row happened to
+ * have, so the grid says "INV-2026-058" rather than a UUID. `payload` is the
+ * complete row, pretty-printed — that is what you restore from.
+ */
+async function auditRows(): Promise<Row[]> {
+  const rows = await db.query.auditLog.findMany({
+    with: { actor: { columns: { name: true } } },
+    orderBy: [desc(t.auditLog.seq)],
+    limit: 500,
+  })
+
+  const label = (row: Record<string, unknown> | null) => {
+    if (!row) return ''
+    for (const key of ['number', 'name', 'title', 'subject', 'period', 'email']) {
+      if (typeof row[key] === 'string' && row[key]) return row[key] as string
+    }
+    return String(row.id ?? '')
+  }
+
+  return rows.map((a): Row => {
+    const body = (a.before ?? a.after) as Record<string, unknown> | null
+    return {
+      id: a.id,
+      at: iso(a.at),
+      actor: a.actor?.name ?? a.actorEmail ?? '—',
+      action: a.action,
+      tableId: a.tableId,
+      summary: label(body),
+      rowId: a.rowId,
+      payload: body ? JSON.stringify(body, null, 2) : '',
+    }
+  })
+}
+
+/* ==========================================================================
+ * PROJECT COCKPIT
+ * ========================================================================== */
+
+/**
+ * Everything about one project in a single round trip.
+ *
+ * The data was always joined — client, deal, invoices, milestones, time, risks —
+ * it just had no surface where it met. Assembling it here rather than in the page
+ * keeps the page a rendering concern and the money definitions in compute.ts.
+ */
+export async function getProject(id: string) {
+  const session = await auth()
+  const showCost = canSeeCost(session?.user?.role ?? null)
+
+  const project = await db.query.projects.findFirst({
+    where: eq(t.projects.id, id),
+    with: {
+      organization: { columns: { id: true, name: true, domain: true, lifecycle: true } },
+      deal: { columns: { id: true, name: true, stage: true } },
+      portfolioProduct: { columns: { id: true, name: true, color: true } },
+      pm: { columns: { id: true, name: true } },
+      milestones: { with: { owner: { columns: { name: true } } } },
+      tasks: { with: { assignee: { columns: { name: true } } } },
+      risks: { with: { owner: { columns: { name: true } } } },
+      changeRequests: true,
+      timeEntries: {
+        with: {
+          teamMember: { columns: { id: true, name: true } },
+          invoice: { columns: { status: true } },
+        },
+      },
+      invoices: { with: { payments: { columns: { amountCents: true } } } },
+    },
+  })
+  if (!project) return null
+
+  const rollup = projectRollup(project)
+  const money = projectFinancials({
+    contractValueCents: project.contractValueCents,
+    internalCostCents: rollup.internalCostCents,
+    invoices: project.invoices,
+  })
+
+  const invoicedMilestones = new Set(project.invoices.map((i) => i.milestoneId).filter(Boolean))
+  /** Accepted payment milestones nobody ever raised an invoice for. */
+  const unbilledDeliveredCents = project.milestones
+    .filter(
+      (m) =>
+        m.paymentTrigger &&
+        (m.status === 'Delivered' || m.status === 'Accepted') &&
+        !invoicedMilestones.has(m.id),
+    )
+    .reduce((sum, m) => sum + m.invoiceAmountCents, 0)
+
+  // Which invoice, if any, each payment-trigger milestone actually produced.
+  const invoiceByMilestone = new Map(
+    project.invoices.filter((i) => i.milestoneId).map((i) => [i.milestoneId as string, i]),
+  )
+
+  // Hours per person on this project, biggest contributor first.
+  const byMember = new Map<string, { name: string; minutes: number; billableMinutes: number }>()
+  for (const entry of project.timeEntries) {
+    const key = entry.teamMember?.id ?? 'unassigned'
+    const current = byMember.get(key) ?? {
+      name: entry.teamMember?.name ?? 'Unassigned', minutes: 0, billableMinutes: 0,
+    }
+    current.minutes += entry.minutes
+    current.billableMinutes += entry.billable ? entry.minutes : 0
+    byMember.set(key, current)
+  }
+
+  // The client's subscription, if they are also on a running plan — a project is
+  // rarely the whole commercial relationship.
+  const subs = project.organization
+    ? await db.query.subscriptions.findMany({
+        where: and(
+          eq(t.subscriptions.organizationId, project.organization.id),
+          eq(t.subscriptions.status, 'Active'),
+        ),
+      })
+    : []
+
+  return {
+    id: project.id,
+    name: project.name,
+    type: project.type,
+    status: project.status,
+    health: project.health,
+    healthNote: project.healthNote,
+    scopeSummary: project.scopeSummary,
+    notes: project.notes,
+    repoUrl: project.repoUrl,
+    stagingUrl: project.stagingUrl,
+    startDate: project.startDate,
+    targetLaunch: project.targetLaunch,
+    baselineLaunch: project.baselineLaunch,
+    actualLaunch: project.actualLaunch,
+    budgetMinutes: project.budgetMinutes,
+
+    client: project.organization
+      ? { id: project.organization.id, name: project.organization.name, lifecycle: project.organization.lifecycle }
+      : null,
+    deal: project.deal ? { id: project.deal.id, name: project.deal.name, stage: project.deal.stage } : null,
+    product: project.portfolioProduct
+      ? { id: project.portfolioProduct.id, name: project.portfolioProduct.name, color: project.portfolioProduct.color }
+      : null,
+    pm: project.pm?.name ?? null,
+
+    rollup,
+    /** Cost and both margins are admin-only, like everywhere else. */
+    money: showCost ? money : { ...money, internalCostCents: 0, contractedMarginBps: null, collectedMarginBps: null },
+    showCost,
+
+    subscription: subs[0]
+      ? {
+          id: subs[0].id,
+          mrrCents: subs[0].mrrCents,
+          renewsOn: subs[0].renewsOn,
+          daysToRenewal: daysUntilRenewal(subs[0].renewsOn),
+        }
+      : null,
+
+    milestones: project.milestones
+      .slice()
+      .sort((a, b) => a.sequence - b.sequence)
+      .map((m) => {
+        const linked = invoiceByMilestone.get(m.id)
+        // Cancelled is excluded deliberately: it completes the project for the
+        // purposes of percent-complete, but a descoped milestone is not billable.
+        const delivered = m.status === 'Delivered' || m.status === 'Accepted'
+        return {
+          id: m.id,
+          name: m.name,
+          status: m.status,
+          phase: m.phase,
+          dueDate: m.dueDate,
+          baselineDue: m.baselineDue,
+          weightBps: m.weightBps,
+          owner: m.owner?.name ?? null,
+          paymentTrigger: m.paymentTrigger,
+          invoiceAmountCents: m.invoiceAmountCents,
+          invoice: linked ? { id: linked.id, number: linked.number, status: linked.status } : null,
+          /**
+           * Accepted work with a payment trigger and no invoice — money earned
+           * and never asked for. A trigger on a milestone still in progress is
+           * simply not due yet, which is a different thing entirely.
+           */
+          unbilled: delivered && m.paymentTrigger && !linked,
+        }
+      }),
+
+    invoices: project.invoices
+      .map((i) => ({ invoice: i, state: invoiceState(i, i.payments) }))
+      .sort((a, b) => (a.invoice.issueDate < b.invoice.issueDate ? 1 : -1))
+      .map(({ invoice, state }) => ({
+        id: invoice.id,
+        number: invoice.number,
+        issueDate: invoice.issueDate,
+        dueDate: invoice.dueDate,
+        state: state.state,
+        totalCents: state.totalCents,
+        outstandingCents: state.outstandingCents,
+        daysOverdue: state.daysOverdue,
+      })),
+
+    unbilledDeliveredCents,
+    /** Hours logged against this project that no live invoice covers. */
+    unbilledMinutes: project.timeEntries
+      .filter((e) => e.billable && !timeIsInvoiced({ invoiceId: e.invoiceId, invoiceStatus: e.invoice?.status }))
+      .reduce((sum, e) => sum + e.minutes, 0),
+    team: [...byMember.values()].sort((a, b) => b.minutes - a.minutes),
+
+    openTasks: project.tasks.filter((task) => isOpenTask(task.status)).length,
+    blockedTasks: project.tasks
+      .filter((task) => task.blocked && isOpenTask(task.status))
+      .map((task) => ({ id: task.id, title: task.title, reason: task.blockedReason })),
+
+    risks: project.risks
+      .filter((r) => r.status === 'Open' || r.status === 'Mitigating')
+      .map((r) => ({
+        id: r.id,
+        title: r.title,
+        category: r.category,
+        severity: riskSeverity(r.probability, r.impact),
+        owner: r.owner?.name ?? null,
+        targetDate: r.targetDate,
+      }))
+      .sort((a, b) => b.severity - a.severity),
+
+    changeRequests: project.changeRequests
+      .filter((c) => c.status !== 'Rejected')
+      .map((c) => ({
+        id: c.id,
+        title: c.title,
+        status: c.status,
+        impactCostCents: c.impactCostCents,
+        impactDays: c.impactDays,
+      })),
+  }
+}
+
+export type ProjectCockpit = NonNullable<Awaited<ReturnType<typeof getProject>>>

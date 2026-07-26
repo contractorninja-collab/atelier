@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { Icon } from './Icon'
 import { IMPORT_SHAPES } from '@/lib/csv'
+import { BRAND } from '@/lib/brand'
 import { deleteSeedData, previewImport, runImport, templateFor, type ImportPreview, type ImportResult } from '@/server/import'
 
 const SHAPES = ['organizations', 'contacts', 'deals'] as const
@@ -96,7 +97,7 @@ export function ImportWorkspace({ counts }: { counts: Record<string, number> }) 
                   </code>
                   <span style={{ fontWeight: 570, minWidth: 110 }}>
                     {f.label}
-                    {f.required ? <span style={{ color: '#e2597a' }}> *</span> : null}
+                    {f.required ? <span style={{ color: 'var(--danger)' }}> *</span> : null}
                   </span>
                   <span style={{ color: 'var(--ink-3)' }}>{f.hint ?? ''}</span>
                 </div>
@@ -139,7 +140,7 @@ export function ImportWorkspace({ counts }: { counts: Record<string, number> }) 
 
         {error ? (
           <div className="pnl" style={{ marginTop: 13, borderColor: 'rgba(226,89,122,0.4)' }}>
-            <div className="pnl-b" style={{ color: '#c2415f', fontSize: 13 }}>{error}</div>
+            <div className="pnl-b" style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</div>
           </div>
         ) : null}
 
@@ -151,11 +152,11 @@ export function ImportWorkspace({ counts }: { counts: Record<string, number> }) 
                 <div className="kpis" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', marginBottom: 16 }}>
                   <div className="kpi"><div className="l">Rows found</div><div className="v" style={{ fontSize: 22 }}>{preview.total}</div></div>
                   <div className="kpi"><div className="l">Will import</div><div className="v" style={{ fontSize: 22, color: 'var(--brand)' }}>{preview.valid}</div></div>
-                  <div className="kpi"><div className="l">Will be skipped</div><div className="v" style={{ fontSize: 22, color: preview.total - preview.valid > 0 ? '#e0a020' : undefined }}>{preview.total - preview.valid}</div></div>
+                  <div className="kpi"><div className="l">Will be skipped</div><div className="v" style={{ fontSize: 22, color: preview.total - preview.valid > 0 ? 'var(--accent-600)' : undefined }}>{preview.total - preview.valid}</div></div>
                 </div>
 
                 {preview.missingRequired.length > 0 ? (
-                  <p style={{ color: '#c2415f', fontSize: 12.5, margin: '0 0 14px' }}>
+                  <p style={{ color: 'var(--danger)', fontSize: 12.5, margin: '0 0 14px' }}>
                     Missing required columns: <b>{preview.missingRequired.join(', ')}</b>. Nothing can be imported until
                     those are present.
                   </p>
@@ -171,7 +172,7 @@ export function ImportWorkspace({ counts }: { counts: Record<string, number> }) 
                       className="pill"
                       style={
                         preview.mapping[f.key]
-                          ? { background: 'rgba(14,159,110,0.15)', color: '#0e9f6e' }
+                          ? { background: 'rgba(28,140,90,0.15)', color: BRAND.success }
                           : { background: 'var(--bg-3)', color: 'var(--ink-3)' }
                       }
                     >

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { Icon, FIELD_ICON } from './Icon'
 import { GridView } from './GridView'
@@ -8,8 +8,10 @@ import { BoardView } from './BoardView'
 import { TimelineView } from './TimelineView'
 import { RecordPanel } from './RecordPanel'
 import { Menu, type MenuState } from './Menu'
-import { NewRecordDialog } from './NewRecordDialog'
-import { moveDealStage, moveTaskStatus, updateCell } from '@/server/actions'
+import { CREATABLE, NewRecordDialog } from './NewRecordDialog'
+import { BulkBar } from './BulkBar'
+import { usePrefs } from './Prefs'
+import { bulkDelete, bulkUpdateCell, moveDealStage, moveTaskStatus, updateCell } from '@/server/actions'
 import { TABLES } from '@/lib/tables'
 import type { CellValue, Field, LinkRef, Row, TableConfig, TableId } from '@/lib/types'
 
@@ -19,16 +21,21 @@ type Props = {
   lookups: Record<string, { id: string; label: string }[]>
 }
 
+/** Above this many rows, a bulk delete has to be typed out rather than clicked. */
+const LARGE_DELETE = 25
+
 export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
+  const { prefs, ready: prefsReady } = usePrefs()
 
   const [rows, setRows] = useState(serverRows)
   const [viewId, setViewId] = useState(config.views[0].id)
   const [query, setQuery] = useState('')
   const [groupBy, setGroupBy] = useState<string | null>(config.views[0].groupBy ?? null)
   const [sortBy, setSortBy] = useState<string | null>(null)
-  const [rowHeight, setRowHeight] = useState(36)
+  const [rowHeight, setRowHeight] = useState(prefs.rowHeight)
+  const [heightTouched, setHeightTouched] = useState(false)
   const [hidden, setHidden] = useState<string[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [openId, setOpenId] = useState<string | null>(null)
@@ -37,6 +44,13 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
   const [showNew, setShowNew] = useState(false)
 
   useEffect(() => setRows(serverRows), [serverRows])
+
+  // Adopt the stored default once localStorage has been read, but never stomp on
+  // a height the user has just picked from the toolbar for this view.
+  useEffect(() => {
+    if (prefsReady && !heightTouched) setRowHeight(prefs.rowHeight)
+  }, [prefsReady, prefs.rowHeight, heightTouched])
+
   useEffect(() => {
     setViewId(config.views[0].id)
     setGroupBy(config.views[0].groupBy ?? null)
@@ -283,12 +297,181 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
           { value: '46', label: 'Tall', checked: rowHeight === 46 },
           { value: '60', label: 'Extra tall', checked: rowHeight === 60 },
         ],
-        onPick: (v) => setRowHeight(Number(v)),
+        onPick: (v) => {
+          setRowHeight(Number(v))
+          setHeightTouched(true)
+        },
       })
     }
   }
 
-  const canCreate = config.id === 'deals' || config.id === 'organizations'
+  /* ------------------------------------------------------------- selection */
+
+  const lastClicked = useRef<string | null>(null)
+
+  const toggleSelect = useCallback(
+    (id: string, event: React.MouseEvent | React.KeyboardEvent) => {
+      // Shift-click extends from the last row clicked, over the rows as currently
+      // filtered and sorted — what you see is what you get.
+      if (event.shiftKey && lastClicked.current) {
+        const order = filtered.map((r) => r.id)
+        const from = order.indexOf(lastClicked.current)
+        const to = order.indexOf(id)
+        if (from !== -1 && to !== -1) {
+          const span = order.slice(Math.min(from, to), Math.max(from, to) + 1)
+          setSelected((s) => new Set([...s, ...span]))
+          lastClicked.current = id
+          return
+        }
+      }
+
+      setSelected((s) => {
+        const next = new Set(s)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      })
+      lastClicked.current = id
+    },
+    [filtered],
+  )
+
+  const toggleAll = useCallback(() => {
+    setSelected((s) => {
+      const allShown = filtered.length > 0 && filtered.every((r) => s.has(r.id))
+      return allShown ? new Set<string>() : new Set(filtered.map((r) => r.id))
+    })
+  }, [filtered])
+
+  /* ---------------------------------------------------------- bulk actions */
+
+  const applyBulk = useCallback(
+    (ids: string[], field: Field, value: string) => {
+      const hasSideEffects =
+        (config.id === 'deals' && field.id === 'stage') ||
+        (config.id === 'tasks' && field.id === 'status')
+
+      // Stage and status carry the history append and the Closed Won handoff, so
+      // they go one at a time through the action that knows about them. A bulk
+      // UPDATE would skip all of it and nobody would notice for a month.
+      if (hasSideEffects) {
+        startTransition(async () => {
+          const results = await Promise.all(
+            ids.map((id) =>
+              config.id === 'deals'
+                ? moveDealStage({ dealId: id, toStage: value as never })
+                : moveTaskStatus({ taskId: id, toStatus: value as never }),
+            ),
+          )
+          const failed = results.filter((r) => !r.ok).length
+          setToast(
+            failed
+              ? { text: `${ids.length - failed} moved, ${failed} failed`, error: true }
+              : { text: `${ids.length} moved — history written for each` },
+          )
+          setSelected(new Set())
+          router.refresh()
+        })
+        return
+      }
+
+      const previous = rows
+      setRows((current) =>
+        current.map((r) => {
+          if (!ids.includes(r.id)) return r
+          if ((field.type === 'link' || field.type === 'user') && typeof value === 'string') {
+            const label = (lookups[field.linkTo ?? ''] ?? []).find((o) => o.id === value)?.label ?? ''
+            return { ...r, [field.id]: value ? { id: value, label, table: field.linkTo as TableId } : null }
+          }
+          return { ...r, [field.id]: value }
+        }),
+      )
+
+      startTransition(async () => {
+        const result = await bulkUpdateCell({
+          table: config.id,
+          ids,
+          field: field.id,
+          value: value === '' ? null : value,
+        })
+        if (!result.ok) {
+          setRows(previous)
+          setToast({ text: result.error, error: true })
+          return
+        }
+        setToast({ text: result.detail ?? `${ids.length} updated` })
+        setSelected(new Set())
+        router.refresh()
+      })
+    },
+    [config.id, rows, lookups, router],
+  )
+
+  const bulkSetField = useCallback(
+    (event: React.MouseEvent, field: Field) => {
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+      const ids = [...selected]
+      const options =
+        field.type === 'select'
+          ? (field.options ?? []).map((o) => ({ value: o.value, label: o.label, color: o.color }))
+          : [
+              { value: '', label: 'Clear', icon: 'x' },
+              ...(lookups[field.linkTo ?? ''] ?? []).map((o) => ({ value: o.id, label: o.label })),
+            ]
+
+      // The bar sits at the bottom of the window, so the menu opens upwards.
+      // Menu clamps both coordinates, which keeps a long option list on screen.
+      setMenu({
+        x: rect.left,
+        y: Math.max(12, rect.top - 8 - Math.min(340, 44 + options.length * 32)),
+        title: `Set ${field.label} on ${ids.length}`,
+        items: options,
+        onPick: (value) => applyBulk(ids, field, value),
+      })
+    },
+    [selected, lookups, applyBulk],
+  )
+
+  const removeSelected = useCallback(() => {
+    const ids = [...selected]
+    if (!ids.length) return
+
+    const noun = ids.length === 1 ? config.singular : `${config.singular}s`
+
+    // Past a screenful, a single OK is too cheap for something this permanent —
+    // ask for the number, so the muscle memory of clicking through cannot do it.
+    // The audit log can reconstruct the rows, but that is a repair, not an undo.
+    if (ids.length > LARGE_DELETE) {
+      const typed = window.prompt(
+        `This deletes ${ids.length} ${noun} permanently.\n\nType ${ids.length} to confirm.`,
+      )
+      if (typed?.trim() !== String(ids.length)) {
+        setToast({ text: 'Delete cancelled' })
+        return
+      }
+    } else if (prefs.confirmDeletes) {
+      // A browser confirm rather than a bespoke dialog: this is the one
+      // irreversible action in the grid and it should feel heavier, not lighter.
+      if (!window.confirm(`Delete ${ids.length} ${noun}? This cannot be undone.`)) return
+    }
+
+    const previous = rows
+    setRows((current) => current.filter((r) => !ids.includes(r.id)))
+    setSelected(new Set())
+
+    startTransition(async () => {
+      const result = await bulkDelete({ table: config.id, ids })
+      if (!result.ok) {
+        setRows(previous)
+        setToast({ text: result.error, error: true })
+        return
+      }
+      setToast({ text: result.detail ?? `${ids.length} deleted` })
+      router.refresh()
+    })
+  }, [selected, rows, config.id, config.singular, prefs.confirmDeletes, router])
+
+  const canCreate = CREATABLE.includes(config.id)
   const groupField = config.fields.find((f) => f.id === (groupBy ?? view.groupBy))
 
   /* ------------------------------------------------------------------ view */
@@ -357,14 +540,8 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
             rows={filtered}
             rowHeight={rowHeight}
             selected={selected}
-            onToggleSelect={(id) =>
-              setSelected((s) => {
-                const next = new Set(s)
-                if (next.has(id)) next.delete(id)
-                else next.add(id)
-                return next
-              })
-            }
+            onToggleSelect={toggleSelect}
+            onToggleAll={toggleAll}
             onOpen={setOpenId}
             onEditCell={(e, row, field) => openFieldMenu(e, field, row)}
             onAdd={() => (canCreate ? setShowNew(true) : setToast({ text: 'Not creatable from here yet' }))}
@@ -397,6 +574,17 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
         }}
         openMenu={openFieldMenu}
       />
+
+      {selected.size > 0 && view.type === 'grid' ? (
+        <BulkBar
+          config={config}
+          fields={visibleFields}
+          count={selected.size}
+          onSetField={bulkSetField}
+          onDelete={removeSelected}
+          onClear={() => setSelected(new Set())}
+        />
+      ) : null}
 
       <Menu state={menu} onClose={() => setMenu(null)} />
 

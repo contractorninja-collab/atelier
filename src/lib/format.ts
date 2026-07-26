@@ -66,7 +66,7 @@ export function initials(name: string): string {
     .toUpperCase()
 }
 
-const AVATAR_COLORS = ['#7c6cf0', '#0e9f6e', '#e0a020', '#3b93e0', '#e2597a', '#12a5a5', '#d97757', '#8b5cf6']
+const AVATAR_COLORS = ['#7c6cf0', '#1c8c5a', '#e2a63a', '#3b93e0', '#c2415f', '#12a5a5', '#d97757', '#8b5cf6']
 
 export function avatarColor(name: string): string {
   let hash = 0

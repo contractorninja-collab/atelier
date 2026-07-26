@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { auth, signIn } from '@/auth'
 import { Icon } from '@/components/Icon'
+import { Mark } from '@/components/Mark'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,8 +19,8 @@ export default async function LoginPage({
   return (
     <div className="login-wrap">
       <div className="login">
-        <div className="ws-mark" style={{ width: 40, height: 40, flexBasis: 40, fontSize: 18, borderRadius: 11 }}>
-          P
+        <div className="ws-mark" style={{ width: 40, height: 40, flexBasis: 40, borderRadius: 11 }}>
+          <Mark size={26} variant="onBrand" />
         </div>
         <h1>Atelier</h1>
         <p className="sub">
@@ -40,7 +41,7 @@ export default async function LoginPage({
         {error ? (
           <div
             style={{
-              background: 'rgba(226,89,122,0.1)', border: '1px solid rgba(226,89,122,0.35)', color: '#c2415f',
+              background: 'color-mix(in srgb, var(--danger) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--danger) 35%, transparent)', color: 'var(--danger)',
               padding: '11px 13px', borderRadius: 8, fontSize: 12.5, marginBottom: 18, lineHeight: 1.5,
             }}
           >

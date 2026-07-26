@@ -1,0 +1,87 @@
+/* ==========================================================================
+   Atelier brand tokens — petrol & saffron.
+   Drop-in replacement for the :root and [data-theme='dark'] ramps at the top
+   of src/app/globals.css. Variable names are unchanged, so no component edits.
+   ========================================================================== */
+:root {
+  /* petrol — primary */
+  --brand: #0f6b73;
+  --brand-600: #0c565d;
+  --brand-700: #094449;
+  --brand-soft: rgba(15, 107, 115, 0.12);
+  --brand-ring: rgba(15, 107, 115, 0.32);
+  --brand-tint: #7fd0cb;
+
+  /* saffron — accent. Attention only: warnings, at-risk, over-capacity,
+     the one number on a card that must be read first. Never a button fill. */
+  --accent: #e2a63a;
+  --accent-600: #c68a24;
+  --accent-soft: rgba(226, 166, 58, 0.15);
+
+  --nav-bg: #0a1618;
+  --nav-bg-2: #0f2023;
+  --nav-ink: #bfd0d2;
+  --nav-ink-2: #7a9095;
+  --nav-active: #163034;
+  --nav-border: #16272a;
+
+  --bg: #ffffff;
+  --bg-2: #f5f8f8;
+  --bg-3: #e9f0f0;
+  --ink: #0a1618;
+  --ink-2: #55666a;
+  --ink-3: #86999d;
+  --line: #dfe8e9;
+  --line-2: #edf2f2;
+  --row-hover: #f5faf9;
+  --row-sel: rgba(15, 107, 115, 0.07);
+
+  --danger: #c2415f;
+  --shadow-sm: 0 1px 2px rgba(10, 22, 24, 0.06), 0 1px 3px rgba(10, 22, 24, 0.05);
+  --shadow-md: 0 4px 12px rgba(10, 22, 24, 0.09), 0 1px 3px rgba(10, 22, 24, 0.06);
+  --shadow-lg: 0 16px 48px rgba(10, 22, 24, 0.18), 0 4px 12px rgba(10, 22, 24, 0.08);
+
+  --r: 7px;
+  --r-lg: 11px;
+  --sb-w: 248px;
+  --row-h: 36px;
+
+  --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+[data-theme='dark'] {
+  --brand: #2f9aa0;
+  --brand-600: #26858b;
+  --brand-700: #1d6f75;
+  --brand-soft: rgba(47, 154, 160, 0.14);
+  --brand-ring: rgba(47, 154, 160, 0.35);
+
+  --nav-bg: #071012;
+  --nav-bg-2: #0c1a1d;
+  --nav-active: #14282c;
+  --nav-border: #122225;
+  --bg: #0d1719;
+  --bg-2: #111d20;
+  --bg-3: #172529;
+  --ink: #e2ecec;
+  --ink-2: #97a9ac;
+  --ink-3: #6a7c80;
+  --line: #1f2f33;
+  --line-2: #182528;
+  --row-hover: #131f22;
+  --row-sel: rgba(47, 154, 160, 0.1);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+/* The workspace mark in the sidebar and login card: solid petrol tile,
+   no gradient. Replaces the .ws-mark letter block. */
+.ws-mark {
+  background: var(--brand);
+  color: #f2f7f8;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.ws-mark svg { width: 64%; height: 64%; }
+.ws-name { font-family: var(--font-display); font-weight: 700; letter-spacing: -0.03em; }

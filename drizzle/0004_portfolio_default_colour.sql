@@ -1,0 +1,1 @@
+ALTER TABLE "portfolio_product" ALTER COLUMN "color" SET DEFAULT '#1c8c5a';
