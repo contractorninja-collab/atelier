@@ -17,7 +17,7 @@ export default async function TablePage({ params }: { params: Promise<{ table: s
   return (
     <>
       <Topbar
-        crumbs={[{ label: space?.name ?? 'Workspace', color: space?.color, abbr: space?.abbr }]}
+        crumbs={[{ label: space?.name ?? 'Workspace', color: space?.color, abbr: space?.abbr, icon: space?.icon }]}
         title={config.name}
       />
       <TableWorkspace config={config} rows={rows} lookups={lookups} />

@@ -4,7 +4,7 @@ import { SpaceDot } from './ui'
 export function Topbar({
   crumbs = [], title, right,
 }: {
-  crumbs?: { label: string; color?: string; abbr?: string }[]
+  crumbs?: { label: string; color?: string; abbr?: string; icon?: string }[]
   title: string
   right?: React.ReactNode
 }) {
@@ -13,7 +13,7 @@ export function Topbar({
       <div className="crumb">
         {crumbs.map((c) => (
           <span key={c.label} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            {c.color && c.abbr ? <SpaceDot color={c.color} letter={c.abbr} /> : null}
+            {c.color && (c.icon || c.abbr) ? <SpaceDot color={c.color} icon={c.icon} letter={c.abbr} /> : null}
             <span>{c.label}</span>
             <Icon name="chev" size={12} />
           </span>

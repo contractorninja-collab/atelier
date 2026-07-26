@@ -503,14 +503,18 @@ export const MILESTONE_TEMPLATE: {
 
 /* ----------------------------------------------------------------- spaces */
 
+/**
+ * `icon` is what the sidebar renders; `abbr` stays as the fallback for anywhere
+ * that has no icon to reach for, and for the breadcrumb on narrow layouts.
+ */
 export const SPACES = [
-  { id: 'sales', name: 'Sales', color: '#1c8c5a', abbr: 'S', tables: ['deals', 'organizations', 'contacts', 'activities'] },
-  { id: 'revenue', name: 'Revenue', color: '#0f9b8e', abbr: 'R', tables: ['clients', 'subscriptions', 'invoices', 'payments'] },
-  { id: 'portfolio', name: 'Portfolio', color: '#8b5cf6', abbr: 'P', tables: ['portfolio', 'tasks', 'sprints'] },
-  { id: 'delivery', name: 'Delivery', color: '#d97757', abbr: 'D', tables: ['projects', 'milestones', 'changeRequests', 'risks'] },
-  { id: 'capacity', name: 'Capacity', color: '#3b93e0', abbr: 'C', tables: ['timeEntries', 'allocations', 'absences'] },
-  { id: 'catalogue', name: 'Catalogue', color: '#e0a020', abbr: 'K', tables: ['products', 'sources'] },
-  { id: 'people', name: 'People & Targets', color: '#12a5a5', abbr: 'T', tables: ['team', 'targets', 'audit'] },
+  { id: 'sales', name: 'Sales', color: '#1c8c5a', abbr: 'S', icon: 'target', tables: ['deals', 'organizations', 'contacts', 'activities'] },
+  { id: 'revenue', name: 'Revenue', color: '#0f9b8e', abbr: 'R', icon: 'euro', tables: ['clients', 'subscriptions', 'invoices', 'payments'] },
+  { id: 'portfolio', name: 'Portfolio', color: '#8b5cf6', abbr: 'P', icon: 'bolt', tables: ['portfolio', 'tasks', 'sprints'] },
+  { id: 'delivery', name: 'Delivery', color: '#d97757', abbr: 'D', icon: 'board', tables: ['projects', 'milestones', 'changeRequests', 'risks'] },
+  { id: 'capacity', name: 'Capacity', color: '#3b93e0', abbr: 'C', icon: 'clock', tables: ['timeEntries', 'allocations', 'absences'] },
+  { id: 'catalogue', name: 'Catalogue', color: '#e0a020', abbr: 'K', icon: 'grid', tables: ['products', 'sources'] },
+  { id: 'people', name: 'People & Targets', color: '#12a5a5', abbr: 'T', icon: 'users', tables: ['team', 'targets', 'audit'] },
 ] as const
 
 /* ----------------------------------------------------------------- tables */

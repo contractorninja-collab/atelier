@@ -81,7 +81,7 @@ export function Sidebar({
           <div className={`space ${open.includes(space.id) ? 'open' : ''}`} key={space.id}>
             <button className="space-h" onClick={() => toggleSpace(space.id)}>
               <span className="space-c"><Icon name="chev" size={13} /></span>
-              <SpaceDot color={space.color} letter={space.abbr} />
+              <SpaceDot color={space.color} icon={space.icon} letter={space.abbr} />
               <span className="space-n hide-c">{space.name}</span>
             </button>
             <div className="space-body">

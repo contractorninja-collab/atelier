@@ -33,7 +33,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   return (
     <>
       <Topbar
-        crumbs={[{ label: 'Delivery', color: '#d97757', abbr: 'D' }]}
+        crumbs={[{ label: 'Delivery', color: '#d97757', abbr: 'D', icon: 'board' }]}
         title={p.name}
       />
       <div className="content">

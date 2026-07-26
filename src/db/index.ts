@@ -53,8 +53,25 @@ function makeDb() {
     postgres(connectionString, {
       // Supabase's pooler does not support prepared statements.
       prepare: false,
-      max: process.env.NODE_ENV === 'production' ? 10 : 3,
+      /**
+       * Small, but not one.
+       *
+       * On Vercel each request may be its own instance, so the pool size is
+       * multiplied by concurrency — ten was enough to make Supabase's pooler
+       * refuse connections under the burst Next fires when it prefetches the
+       * sidebar links. One is the opposite mistake: a single page calls
+       * getLookups, which issues a dozen queries in parallel, and they would
+       * queue behind each other on the only connection.
+       *
+       * Five lets that fan-out pipeline while keeping the per-instance
+       * footprint low enough for the transaction pooler to absorb.
+       */
+      max: process.env.NODE_ENV === 'production' ? 5 : 3,
+      idle_timeout: 20,
+      connect_timeout: 15,
     })
+  // Reused across hot reloads in dev; in production each instance is short-lived
+  // and Vercel may freeze it, so caching a socket on globalThis is not safe.
   if (process.env.NODE_ENV !== 'production') globalForDb.pgClient = client
   return drizzlePostgres(client, { schema })
 }
