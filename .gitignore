@@ -13,3 +13,5 @@ yarn-error.log*
 next-env.d.ts
 *.tsbuildinfo
 /prisma/dev.db
+.atelier-local/
+tsconfig.tsbuildinfo

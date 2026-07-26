@@ -13,6 +13,7 @@ export default async function LoginPage({
   if (session?.user) redirect('/home')
 
   const { sent, error } = await searchParams
+  const devLogin = process.env.ATELIER_DEV_LOGIN === 'true' && process.env.NODE_ENV !== 'production'
 
   return (
     <div className="login-wrap">
@@ -63,6 +64,20 @@ export default async function LoginPage({
             Email me a sign-in link
           </button>
         </form>
+
+        {devLogin ? (
+          <>
+            <div className="or">local development</div>
+            <a className="btn out full" href="/api/dev-login" style={{ textDecoration: 'none' }}>
+              <Icon name="bolt" size={15} />
+              Sign in as the founder
+            </a>
+            <p style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '10px 0 0', lineHeight: 1.6 }}>
+              Available because ATELIER_DEV_LOGIN is set and this is not a production build.
+              The route returns 404 in production.
+            </p>
+          </>
+        ) : null}
 
         <div className="or">or</div>
 

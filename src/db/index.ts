@@ -1,30 +1,65 @@
-import { drizzle } from 'drizzle-orm/postgres-js'
+import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js'
+import { drizzle as drizzlePglite } from 'drizzle-orm/pglite'
+import { PGlite } from '@electric-sql/pglite'
 import postgres from 'postgres'
 import * as schema from './schema'
 
-const connectionString = process.env.DATABASE_URL
+/**
+ * Two ways to get a database.
+ *
+ * ATELIER_LOCAL_DB=true runs PGlite — real Postgres compiled to WebAssembly,
+ * kept in a folder beside the project. No install, no Docker, no account. It
+ * exists so you can clone this and see it running in two minutes.
+ *
+ * Anything else opens a normal Postgres connection, which is what production
+ * is. Local mode is refused in a production build on purpose: PGlite is a
+ * single-process file store, so a deployment pointed at it would give every
+ * serverless instance its own private copy of the company's data.
+ */
+const useLocal = process.env.ATELIER_LOCAL_DB === 'true'
 
-if (!connectionString) {
+if (useLocal && process.env.NODE_ENV === 'production' && !process.env.ATELIER_ALLOW_LOCAL_DB_IN_PROD) {
   throw new Error(
-    'DATABASE_URL is not set. Copy .env.example to .env and fill in your Supabase connection string.',
+    'ATELIER_LOCAL_DB is set in a production build. PGlite is for local development only — ' +
+    'point DATABASE_URL at a real Postgres instead.',
   )
 }
 
-/**
- * Next dev reloads modules on every save; without this the connection count
- * climbs until Postgres refuses new clients.
- */
-const globalForDb = globalThis as unknown as { pgClient?: ReturnType<typeof postgres> }
+// Next reloads modules on every save in development. Without these globals the
+// connection count climbs until Postgres refuses new clients, and PGlite would
+// open a second handle to the same directory.
+const globalForDb = globalThis as unknown as {
+  pgClient?: ReturnType<typeof postgres>
+  pgliteClient?: PGlite
+}
 
-const client =
-  globalForDb.pgClient ??
-  postgres(connectionString, {
-    // Supabase's pooler does not support prepared statements.
-    prepare: false,
-    max: process.env.NODE_ENV === 'production' ? 10 : 3,
-  })
+function makeDb() {
+  if (useLocal) {
+    const client = globalForDb.pgliteClient ?? new PGlite(process.env.ATELIER_LOCAL_DB_PATH ?? '.atelier-local')
+    if (process.env.NODE_ENV !== 'production') globalForDb.pgliteClient = client
+    return drizzlePglite(client, { schema })
+  }
 
-if (process.env.NODE_ENV !== 'production') globalForDb.pgClient = client
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) {
+    throw new Error(
+      'DATABASE_URL is not set. Either copy .env.example to .env and fill in a Postgres connection ' +
+      'string, or run `npm run local` to use the built-in local database.',
+    )
+  }
 
-export const db = drizzle(client, { schema })
-export { schema }
+  const client =
+    globalForDb.pgClient ??
+    postgres(connectionString, {
+      // Supabase's pooler does not support prepared statements.
+      prepare: false,
+      max: process.env.NODE_ENV === 'production' ? 10 : 3,
+    })
+  if (process.env.NODE_ENV !== 'production') globalForDb.pgClient = client
+  return drizzlePostgres(client, { schema })
+}
+
+// Both drivers expose the same query surface; the cast keeps every call site
+// written against one type rather than a union of two.
+export const db = makeDb() as unknown as ReturnType<typeof drizzlePostgres<typeof schema>>
+export { schema, useLocal }

@@ -49,9 +49,27 @@ It is **idempotent**: a second Closed Won on the same deal creates nothing. Dupl
 
 ---
 
-## Getting it running
+## See it running in two minutes
 
-**Deploying for the first time? Follow [DEPLOY.md](./DEPLOY.md)** — it is the step-by-step version of everything below, with the exact values to paste.
+No database, no account, no Docker. You need Node 20 or newer and nothing else.
+
+```bash
+npm install
+npm run local:setup    # creates a local database and fills it with demo data
+npm run local          # starts the app
+```
+
+Open **http://localhost:3000** and click **“Sign in as the founder.”**
+
+That local database is [PGlite](https://pglite.dev) — real Postgres compiled to WebAssembly, stored in a `.atelier-local` folder beside the project. Delete the folder, or run `npm run local:reset`, to start over.
+
+The sign-in shortcut only exists because `npm run local` sets `ATELIER_DEV_LOGIN`. In a production build the route returns 404 and the button is not rendered. Use this mode to look around and to develop; use a real Postgres for anything you care about, because PGlite is a single-process file store.
+
+---
+
+## Running it properly
+
+**Deploying for the first time? Follow [DEPLOY.md](./DEPLOY.md)** — the step-by-step version of everything below, with the exact values to paste.
 
 You need Node 20+ and a Postgres database. Supabase's free tier is the shortest path.
 

@@ -1,5 +1,17 @@
 # Deploying Atelier
 
+**Just want to look at it first?** Skip all of this:
+
+```bash
+npm install && npm run local:setup && npm run local
+```
+
+That runs Atelier against a local WebAssembly Postgres with demo data and a
+development sign-in button. Nothing below is needed until you want other
+people to use it.
+
+---
+
 About an hour, most of it waiting for accounts to provision. Everything you paste is listed explicitly — you should not have to guess a single value.
 
 At any point, open `https://your-app/health`. It tells you exactly which piece is missing and how to fix it, and it works before sign-in does, because the most common reason a fresh deployment is unusable is that sign-in itself is misconfigured.

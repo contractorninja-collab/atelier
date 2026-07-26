@@ -7,14 +7,29 @@
 import 'dotenv/config'
 import { eq } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/postgres-js'
+import { drizzle as drizzlePglite } from 'drizzle-orm/pglite'
+import { PGlite } from '@electric-sql/pglite'
 import postgres from 'postgres'
 import * as s from './schema'
 
-const url = process.env.DIRECT_URL ?? process.env.DATABASE_URL
-if (!url) throw new Error('Set DATABASE_URL (and ideally DIRECT_URL) in .env first.')
+// Seeds whichever database the app is pointed at — the built-in local one
+// when ATELIER_LOCAL_DB is set, a real Postgres otherwise.
+const useLocal = process.env.ATELIER_LOCAL_DB === 'true'
 
-const client = postgres(url, { max: 1, prepare: false })
-const db = drizzle(client, { schema: s })
+let db: ReturnType<typeof drizzle<typeof s>>
+let close: () => Promise<void>
+
+if (useLocal) {
+  const client = new PGlite(process.env.ATELIER_LOCAL_DB_PATH ?? '.atelier-local')
+  db = drizzlePglite(client, { schema: s }) as unknown as ReturnType<typeof drizzle<typeof s>>
+  close = () => client.close()
+} else {
+  const url = process.env.DIRECT_URL ?? process.env.DATABASE_URL
+  if (!url) throw new Error('Set DATABASE_URL (and ideally DIRECT_URL) in .env, or run: npm run local')
+  const client = postgres(url, { max: 1, prepare: false })
+  db = drizzle(client, { schema: s })
+  close = () => client.end()
+}
 
 /**
  * The address you sign in with, and the house domain for everyone else.
@@ -529,11 +544,11 @@ async function main() {
   ])
 
   console.log(`\nDone. Sign in as ${FOUNDER_EMAIL}.`)
-  await client.end()
+  await close()
 }
 
 main().catch(async (error) => {
   console.error(error)
-  await client.end()
+  await close()
   process.exit(1)
 })
