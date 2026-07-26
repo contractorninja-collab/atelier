@@ -1,5 +1,5 @@
 import 'server-only'
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import * as t from '@/db/schema'
 import type { LinkRef, Row, TableId } from '@/lib/types'
@@ -708,39 +708,53 @@ export async function getRows(table: TableId): Promise<Row[]> {
   })
 }
 
-/** Options for link and user pickers in the record panel. */
+const EMPTY_LOOKUPS = (): Record<string, { id: string; label: string }[]> => ({
+  organizations: [], contacts: [], team: [], sources: [], deals: [], portfolio: [],
+  projects: [], milestones: [], sprints: [], tasks: [], invoices: [], subscriptions: [],
+})
+
+/**
+ * Options for every link and user picker. One query, not twelve.
+ *
+ * This used to fire a dozen parallel full-table selects on every navigation,
+ * each holding a pooler connection, to fill dropdowns that are only read when
+ * somebody actually opens a picker. On Vercel that was enough to wedge the
+ * layout: the queries queued, the page never rendered, and the function sat
+ * there until it hit its timeout — taking every authenticated route with it.
+ *
+ * A UNION ALL fetches the same data down one connection. Labels are built in
+ * SQL so every row has the same shape; grouping and sorting happen here, where
+ * they cost nothing.
+ */
 export async function getLookups(): Promise<Record<string, { id: string; label: string }[]>> {
-  const [orgs, people, members, srcs, dls, folio, projs, miles, sprnts, tsks, invs, subs] = await Promise.all([
-    db.select({ id: t.organizations.id, label: t.organizations.name }).from(t.organizations).orderBy(t.organizations.name),
-    db.select({ id: t.contacts.id, first: t.contacts.firstName, last: t.contacts.lastName }).from(t.contacts),
-    db.select({ id: t.teamMembers.id, label: t.teamMembers.name }).from(t.teamMembers).orderBy(t.teamMembers.name),
-    db.select({ id: t.sources.id, label: t.sources.name }).from(t.sources).orderBy(t.sources.name),
-    db.select({ id: t.deals.id, label: t.deals.name }).from(t.deals).orderBy(t.deals.name),
-    db.select({ id: t.portfolioProducts.id, label: t.portfolioProducts.name })
-      .from(t.portfolioProducts).orderBy(t.portfolioProducts.name),
-    db.select({ id: t.projects.id, label: t.projects.name }).from(t.projects).orderBy(t.projects.name),
-    db.select({ id: t.milestones.id, label: t.milestones.name }).from(t.milestones).orderBy(t.milestones.name),
-    db.select({ id: t.sprints.id, label: t.sprints.name }).from(t.sprints).orderBy(desc(t.sprints.startDate)),
-    db.select({ id: t.tasks.id, label: t.tasks.title }).from(t.tasks).orderBy(t.tasks.title),
-    db.select({ id: t.invoices.id, label: t.invoices.number }).from(t.invoices).orderBy(desc(t.invoices.number)),
-    db.select({ id: t.subscriptions.id, label: t.organizations.name })
-      .from(t.subscriptions)
-      .innerJoin(t.organizations, eq(t.subscriptions.organizationId, t.organizations.id))
-      .orderBy(t.organizations.name),
-  ])
-  return {
-    organizations: orgs,
-    contacts: people.map((c) => ({ id: c.id, label: `${c.first} ${c.last}` })).sort((a, b) => a.label.localeCompare(b.label)),
-    team: members,
-    sources: srcs,
-    deals: dls,
-    portfolio: folio,
-    projects: projs,
-    milestones: miles,
-    sprints: sprnts,
-    tasks: tsks,
-    invoices: invs,
-    subscriptions: subs,
+  try {
+    const rows = await db.execute<{ kind: string; id: string; label: string | null }>(sql`
+                select 'organizations'  as kind, id,   name                           as label from ${t.organizations}
+      union all select 'contacts',            id,   first_name || ' ' || last_name  from ${t.contacts}
+      union all select 'team',                id,   name                            from ${t.teamMembers}
+      union all select 'sources',             id,   name                            from ${t.sources}
+      union all select 'deals',               id,   name                            from ${t.deals}
+      union all select 'portfolio',           id,   name                            from ${t.portfolioProducts}
+      union all select 'projects',            id,   name                            from ${t.projects}
+      union all select 'milestones',          id,   name                            from ${t.milestones}
+      union all select 'sprints',             id,   name                            from ${t.sprints}
+      union all select 'tasks',               id,   title                           from ${t.tasks}
+      union all select 'invoices',            id,   number                          from ${t.invoices}
+      union all select 'subscriptions',     s.id,   o.name
+                  from ${t.subscriptions} s
+                  join ${t.organizations} o on o.id = s.organization_id
+    `)
+
+    const grouped = EMPTY_LOOKUPS()
+    for (const row of rows as unknown as { kind: string; id: string; label: string | null }[]) {
+      grouped[row.kind]?.push({ id: row.id, label: row.label ?? '' })
+    }
+    for (const bucket of Object.values(grouped)) bucket.sort((a, b) => a.label.localeCompare(b.label))
+    return grouped
+  } catch (error) {
+    // Pickers degrade to empty rather than taking the page down with them.
+    console.error('getLookups failed; rendering without picker options', error)
+    return EMPTY_LOOKUPS()
   }
 }
 
