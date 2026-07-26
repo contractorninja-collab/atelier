@@ -67,8 +67,21 @@ function makeDb() {
        * footprint low enough for the transaction pooler to absorb.
        */
       max: process.env.NODE_ENV === 'production' ? 5 : 3,
-      idle_timeout: 20,
-      connect_timeout: 15,
+      /**
+       * Recycle sockets aggressively, because serverless instances get frozen.
+       *
+       * Vercel can suspend an instance mid-request. The socket dies with it, but
+       * Postgres does not know that — the backend sits in `ClientRead` waiting
+       * for a client that is never coming back, holding a pooler slot. Enough of
+       * those and every new query queues until it times out, which is what made
+       * the deployed app hang on any page that touched the database.
+       *
+       * A short idle timeout and a capped lifetime mean an abandoned connection
+       * is measured in seconds rather than hours.
+       */
+      idle_timeout: 10,
+      max_lifetime: 60 * 5,
+      connect_timeout: 10,
     })
   // Reused across hot reloads in dev; in production each instance is short-lived
   // and Vercel may freeze it, so caching a socket on globalThis is not safe.
