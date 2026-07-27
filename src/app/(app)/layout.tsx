@@ -3,7 +3,7 @@ import { SessionProvider } from 'next-auth/react'
 import { auth } from '@/auth'
 import { Shell } from '@/components/Shell'
 import { getLookups, getMyProfile } from '@/server/queries'
-import { db } from '@/db'
+import { db, rowsOf } from '@/db'
 import * as t from '@/db/schema'
 import { sql } from 'drizzle-orm'
 import type { TableId } from '@/lib/types'
@@ -61,7 +61,7 @@ async function tableCounts(): Promise<Partial<Record<TableId, number>>> {
         (select count(*) from ${t.teamMembers})   as team,
         (select count(*) from ${t.targets})       as targets
     `)
-    const row = (rows as unknown as Record<string, number | string>[])[0] ?? {}
+    const row = rowsOf<Record<string, number | string>>(rows)[0] ?? {}
     const n = (key: string) => Number(row[key] ?? 0)
     return {
       deals: n('deals'),

@@ -3,22 +3,33 @@
 import { useEffect, useState, useTransition } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from './Icon'
+import { GenericForm } from './GenericForm'
 import {
   createDeal, createInvoice, createOrganization, createPayment, createTarget, createTeamMember,
   openInvoices, suggestInvoiceNumber,
 } from '@/server/actions'
-import { DEAL_STAGE_OPTIONS, TABLES, TARGET_METRIC_UNIT } from '@/lib/tables'
+import { CREATE_SPEC, DEAL_STAGE_OPTIONS, TABLES, TARGET_METRIC_UNIT } from '@/lib/tables'
 import type { ActionResult, TableId } from '@/lib/types'
 
 type Lookups = Record<string, { id: string; label: string }[]>
 
 /**
- * Tables with a create form. Everything else still opens as a toast, because
- * each remaining table has its own required-field story — a milestone needs a
- * project and weights totalling exactly 10000 basis points, a project needs an
- * organization and a deal. A generic form would get those quietly wrong.
+ * Tables with a bespoke form, because something about them is not expressible as
+ * a field list: a deal opens in a specific stage, a target's unit depends on its
+ * metric, an invoice numbers itself, a payment defaults to what is outstanding.
  */
-export const CREATABLE: TableId[] = ['deals', 'organizations', 'targets', 'team', 'invoices', 'payments']
+const BESPOKE: TableId[] = ['deals', 'organizations', 'targets', 'team', 'invoices', 'payments']
+
+/**
+ * Everything creatable — the bespoke forms plus every table declaring a
+ * CREATE_SPEC, which the generic form renders straight from the table config.
+ * The audit log is deliberately absent: it is append-only and written by the
+ * server, never by a person.
+ */
+export const CREATABLE: TableId[] = [
+  ...BESPOKE,
+  ...(Object.keys(CREATE_SPEC) as TableId[]).filter((id) => !BESPOKE.includes(id)),
+]
 
 const TITLES: Partial<Record<TableId, string>> = {
   deals: 'deal',
@@ -115,6 +126,7 @@ export function NewRecordDialog({
   prefill?: Prefill
 }) {
   const title = TITLES[table] ?? TABLES[table].singular
+  const [genericPending, setGenericPending] = useState(false)
 
   // Two separate escapes, both needed.
   //
@@ -161,6 +173,12 @@ export function NewRecordDialog({
         ) : null}
         {table === 'payments' ? (
           <PaymentForm onDone={onDone} prefill={prefill?.kind === 'payment' ? prefill : undefined} />
+        ) : null}
+        {!BESPOKE.includes(table) ? (
+          <GenericForm
+            table={table} lookups={lookups} onDone={onDone}
+            pending={genericPending} setPending={setGenericPending}
+          />
         ) : null}
       </div>
     </div>,

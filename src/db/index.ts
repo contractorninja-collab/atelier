@@ -92,4 +92,21 @@ function makeDb() {
 // Both drivers expose the same query surface; the cast keeps every call site
 // written against one type rather than a union of two.
 export const db = makeDb() as unknown as ReturnType<typeof drizzlePostgres<typeof schema>>
+
+/**
+ * Rows out of `db.execute`, whichever driver is underneath.
+ *
+ * The two disagree: postgres-js hands back the row array itself, PGlite hands
+ * back `{ rows, fields }`. Code written against one silently reads nothing on
+ * the other — no error, just an empty result, which is far worse than a crash
+ * because it looks like an empty database.
+ *
+ * Only raw `execute` needs this. Drizzle's query builder and relational API
+ * normalise the shape themselves.
+ */
+export function rowsOf<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[]
+  const rows = (result as { rows?: unknown } | null)?.rows
+  return Array.isArray(rows) ? (rows as T[]) : []
+}
 export { schema, useLocal }

@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { db } from '@/db'
+import { db, rowsOf } from '@/db'
 import * as t from '@/db/schema'
 import { Mark } from '@/components/Mark'
 import { BRAND } from '@/lib/brand'
@@ -82,7 +82,9 @@ async function runChecks(): Promise<Check[]> {
     const tables = await db.execute<{ count: string }>(
       sql`select count(*)::text as count from information_schema.tables where table_schema = 'public'`,
     )
-    const tableCount = Number(tables[0]?.count ?? 0)
+    // rowsOf, because the two drivers disagree about what execute returns —
+    // reading the array directly reports zero tables against a healthy database.
+    const tableCount = Number(rowsOf<{ count: string }>(tables)[0]?.count ?? 0)
     checks.push({ label: 'Database connection', state: 'ok', detail: `Connected · ${tableCount} tables` })
 
     if (tableCount < 18) {

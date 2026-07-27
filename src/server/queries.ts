@@ -1,6 +1,6 @@
 import 'server-only'
 import { and, desc, eq, sql } from 'drizzle-orm'
-import { db } from '@/db'
+import { db, rowsOf } from '@/db'
 import * as t from '@/db/schema'
 import type { LinkRef, Row, TableId } from '@/lib/types'
 import {
@@ -746,7 +746,7 @@ export async function getLookups(): Promise<Record<string, { id: string; label: 
     `)
 
     const grouped = EMPTY_LOOKUPS()
-    for (const row of rows as unknown as { kind: string; id: string; label: string | null }[]) {
+    for (const row of rowsOf<{ kind: string; id: string; label: string | null }>(rows)) {
       grouped[row.kind]?.push({ id: row.id, label: row.label ?? '' })
     }
     for (const bucket of Object.values(grouped)) bucket.sort((a, b) => a.label.localeCompare(b.label))

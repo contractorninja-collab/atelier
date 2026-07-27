@@ -1196,6 +1196,70 @@ const AUDIT: Partial<Record<TableId, TableConfig>> = {
 
 export const TABLES = { ...PHASE_1, ...PHASE_2, ...REVENUE, ...AUDIT } as Record<TableId, TableConfig>
 
+/**
+ * What the New-record form asks for, per table.
+ *
+ * `required` mirrors the notNull columns that have no database default — get one
+ * wrong and the insert fails with a constraint error instead of a sentence. Any
+ * other writable, non-computed field is offered as optional; `hide` drops the
+ * ones a person should not be setting by hand at creation time.
+ *
+ * Some tables need more than a field list. Those invariants live server-side in
+ * createRecord, because a form cannot be trusted to hold them: time entries must
+ * snapshot the member's rates, a subscription's renewal date follows from its
+ * term, and milestone weights have to total 10000 basis points across a project.
+ */
+export type CreateSpec = {
+  required: string[]
+  hide?: string[]
+  /** Shown under the title, for tables where the rules are not obvious. */
+  note?: string
+}
+
+export const CREATE_SPEC: Partial<Record<TableId, CreateSpec>> = {
+  clients: {
+    required: ['name', 'domain'],
+    note: 'Creates an organization already marked as a customer, so it appears here immediately.',
+  },
+  subscriptions: {
+    required: ['organizationId', 'startDate', 'termMonths', 'mrrCents'],
+    hide: ['renewsOn', 'endedOn', 'cancelReason'],
+    note: 'The renewal date is calculated from the start date and term.',
+  },
+  contacts: { required: ['firstName', 'lastName', 'email', 'organizationId'] },
+  activities: {
+    required: ['subject', 'type', 'occurredAt'],
+    note: 'Logged activity is what keeps a client from drifting to Cold.',
+  },
+  products: { required: ['name', 'type', 'listPriceCents', 'billing'] },
+  sources: { required: ['name', 'category'] },
+  portfolio: {
+    required: ['name', 'slug'],
+    note: 'A product the house owns and builds. Slug must be unique.',
+  },
+  projects: {
+    required: ['name'],
+    hide: ['actualLaunch'],
+    note: 'Winning a Project, Hybrid or Retainer deal creates one of these automatically, with milestones.',
+  },
+  milestones: {
+    required: ['name', 'projectId', 'weightBps'],
+    hide: ['completedDate', 'signedOffById', 'signedOffDate'],
+    note: 'Weights must total 100% across a project or percent-complete can never reach 100.',
+  },
+  tasks: { required: ['title'], hide: ['blockedReason'] },
+  sprints: { required: ['name', 'startDate', 'endDate'], hide: ['retroNotes'] },
+  timeEntries: {
+    required: ['teamMemberId', 'workedOn', 'minutes'],
+    hide: ['invoiced', 'invoiceId'],
+    note: 'Cost and bill rates are copied from the member as they are today, and frozen on the entry.',
+  },
+  allocations: { required: ['teamMemberId', 'weekStarting', 'plannedMinutes'] },
+  absences: { required: ['teamMemberId', 'type', 'startDate', 'endDate', 'workingDays'] },
+  changeRequests: { required: ['title', 'projectId', 'raisedDate'], hide: ['approvedDate'] },
+  risks: { required: ['title', 'projectId', 'category', 'probability', 'impact'], hide: ['resolvedDate'] },
+}
+
 /** Deals gained a portfolio link in Phase 2. */
 TABLES.deals.fields.splice(
   TABLES.deals.fields.findIndex((f) => f.id === 'type') + 1,

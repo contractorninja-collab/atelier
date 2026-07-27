@@ -7,7 +7,7 @@ import { db } from '@/db'
 import * as t from '@/db/schema'
 import { auth } from '@/auth'
 import {
-  MILESTONE_TEMPLATE, TARGET_METRIC_UNIT, TARGET_PERIOD_PATTERN, getTable,
+  CREATE_SPEC, MILESTONE_TEMPLATE, TARGET_METRIC_UNIT, TARGET_PERIOD_PATTERN, getTable,
 } from '@/lib/tables'
 import { canDelete, canWrite, refusal } from '@/lib/permissions'
 import { daysBetween, normaliseDomain, toISODate } from '@/lib/format'
@@ -197,6 +197,15 @@ const WRITABLE: Record<TableId, string[]> = {
   audit: [],
 }
 
+/**
+ * Writable fields whose column is a `timestamp`, not a `date`.
+ *
+ * Verified against the schema: `occurredAt` is currently the only one. Keep this
+ * in step if another timestamp column is ever added to WRITABLE — see the note
+ * in prepareCellWrite for what goes wrong otherwise.
+ */
+const TIMESTAMP_FIELDS = new Set(['occurredAt'])
+
 /** Fields the UI calls one thing and the database calls another. */
 const COLUMN_ALIASES: Record<string, string> = {
   portfolioProductId: 'portfolioProductId',
@@ -272,7 +281,17 @@ function prepareCellWrite(
   // Weights are entered as a percentage and stored in basis points.
   if (field.type === 'percent' && typeof value === 'string') value = Math.round(Number(value) * 100)
   if (fieldId === 'domain' && typeof value === 'string') value = normaliseDomain(value)
-  if (field.type === 'date' && typeof value === 'string' && fieldId === 'occurredAt') {
+  /**
+   * A `date` field may sit on a `date` column or a `timestamp` one, and Drizzle
+   * treats them differently: a date column takes the ISO string as-is, a
+   * timestamp column expects a JS Date and calls `.toISOString()` on whatever it
+   * is given. Hand it a string and it throws `value.toISOString is not a
+   * function` — from inside the driver, with a stack that names none of this.
+   *
+   * Listed explicitly rather than inferred, so adding a writable timestamp means
+   * adding it here and not discovering the same error again.
+   */
+  if (field.type === 'date' && typeof value === 'string' && TIMESTAMP_FIELDS.has(fieldId)) {
     value = new Date(value)
   }
 
@@ -908,6 +927,195 @@ export async function createTarget(input: NewTargetInput): Promise<ActionResult>
     return { ok: true, detail: `Target set for ${data.period}` }
   } catch (error) {
     return failure('createTarget', error, 'Could not create target')
+  }
+}
+
+/* ------------------------------------------------------------ generic create */
+
+const createSchema = z.object({
+  table: z.string(),
+  values: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+})
+
+/**
+ * Create a row in any table the config declares creatable.
+ *
+ * Coercion goes through the same prepareCellWrite the grid uses, so euros become
+ * cents and hours become minutes by one definition rather than two. What this
+ * function adds on top are the invariants a field list cannot express — see
+ * `applyCreateRules`. Those run server-side because they are the difference
+ * between a record that is merely accepted and one that is correct.
+ */
+export async function createRecord(input: z.infer<typeof createSchema>): Promise<ActionResult> {
+  try {
+    const parsed = createSchema.parse(input)
+    const config = getTable(parsed.table)
+    if (!config) return { ok: false, error: 'Unknown table' }
+
+    const spec = CREATE_SPEC[config.id]
+    if (!spec) return { ok: false, error: `${config.name} cannot be created from here` }
+
+    const member = await requirePermission(config.id, 'edit')
+
+    for (const field of spec.required) {
+      const value = parsed.values[field]
+      if (value === undefined || value === null || value === '') {
+        const label = config.fields.find((f) => f.id === field)?.label ?? field
+        return { ok: false, error: `${label} is required` }
+      }
+    }
+
+    // Coerce each supplied value exactly as an inline edit would.
+    const row: Record<string, unknown> = {}
+    for (const [field, raw] of Object.entries(parsed.values)) {
+      if (raw === '' || raw === undefined) continue
+      const prepared = prepareCellWrite(parsed.table, field, raw)
+      if (!prepared.ok) return prepared
+      row[prepared.column] = prepared.value
+    }
+
+    const ruled = await applyCreateRules(config.id, row, member)
+    if (!ruled.ok) return ruled
+
+    const drizzleTable = TABLE_TO_DRIZZLE[config.id]
+    const [created] = await db.insert(drizzleTable).values(ruled.row as never).returning()
+
+    await recordAudit(member, 'create', config.id, [created as Record<string, unknown>])
+    revalidatePath('/', 'layout')
+
+    return {
+      ok: true,
+      detail: `${humanLabel(created as Record<string, unknown>, config.singular)} created${ruled.note ? ` — ${ruled.note}` : ''}`,
+    }
+  } catch (error) {
+    return failure('createRecord', error, 'Could not create the record')
+  }
+}
+
+/**
+ * Something a person will recognise in the toast.
+ *
+ * Not the config's first field: on a subscription that is the client *id*, so
+ * the confirmation read "5fa0d478-b144-… created". Falls back to the table's
+ * singular rather than showing a UUID.
+ */
+function humanLabel(row: Record<string, unknown>, singular: string): string {
+  for (const key of ['name', 'title', 'subject', 'number', 'period', 'email', 'slug']) {
+    const value = row[key]
+    if (typeof value === 'string' && value.trim()) return value
+  }
+  return `A ${singular}`
+}
+
+type RuleResult =
+  | { ok: true; row: Record<string, unknown>; note?: string }
+  | { ok: false; error: string }
+
+/**
+ * The per-table rules. Everything here exists because getting it wrong produces
+ * a row that looks fine and reports wrongly.
+ */
+async function applyCreateRules(
+  table: TableId,
+  row: Record<string, unknown>,
+  member: Actor,
+): Promise<RuleResult> {
+  const str = (key: string) => (typeof row[key] === 'string' ? (row[key] as string) : null)
+  const num = (key: string) => (typeof row[key] === 'number' ? (row[key] as number) : null)
+
+  const endAfterStart = (startKey: string, endKey: string, what: string): string | null => {
+    const start = str(startKey)
+    const end = str(endKey)
+    return start && end && end < start ? `${what} cannot end before it starts` : null
+  }
+
+  switch (table) {
+    case 'clients': {
+      // A client is an organization that has reached Customer. Creating one here
+      // sets that, otherwise it would not appear in the list it was created from.
+      const domain = str('domain')
+      if (!domain) return { ok: false, error: 'Domain is required' }
+      const normalised = normaliseDomain(domain)
+      const clash = await db.query.organizations.findFirst({ where: eq(t.organizations.domain, normalised) })
+      if (clash) return { ok: false, error: `${clash.name} already uses ${normalised}` }
+      return {
+        ok: true,
+        row: { ...row, domain: normalised, lifecycle: 'Customer', types: ['Customer'], ownerId: row.ownerId ?? member.memberId },
+      }
+    }
+
+    case 'subscriptions': {
+      const startDate = str('startDate')
+      const termMonths = num('termMonths') ?? 12
+      if (!startDate) return { ok: false, error: 'Start date is required' }
+      // Derived, never asked for: renewsOn is start + term, and it moves on renewal.
+      const renewsOn = nextRenewalDate(startDate, termMonths)
+      return { ok: true, row: { ...row, termMonths, renewsOn }, note: `renews ${renewsOn}` }
+    }
+
+    case 'timeEntries': {
+      const memberId = str('teamMemberId')
+      if (!memberId) return { ok: false, error: 'Team member is required' }
+      const person = await db.query.teamMembers.findFirst({
+        where: eq(t.teamMembers.id, memberId),
+        columns: { costRateCents: true, billRateCents: true },
+      })
+      if (!person) return { ok: false, error: 'Unknown team member' }
+      // Snapshotted deliberately. Looking these up live would restate last
+      // year's margin the day somebody gets a raise.
+      return {
+        ok: true,
+        row: { ...row, costRateCents: person.costRateCents ?? 0, billRateCents: person.billRateCents ?? 0 },
+      }
+    }
+
+    case 'milestones': {
+      const projectId = str('projectId')
+      const weight = num('weightBps') ?? 0
+      if (!projectId) return { ok: false, error: 'Project is required' }
+      const siblings = await db.query.milestones.findMany({
+        where: eq(t.milestones.projectId, projectId),
+        columns: { weightBps: true },
+      })
+      const total = siblings.reduce((sum, m) => sum + m.weightBps, 0) + weight
+      // Reported, not refused: you may legitimately add milestones one at a time
+      // and rebalance after. Silence would be the problem.
+      const note = total === 10_000
+        ? 'weights now total 100%'
+        : `weights now total ${(total / 100).toFixed(1)}% — percent complete cannot reach 100 until they total 100`
+      return { ok: true, row, note }
+    }
+
+    case 'contacts': {
+      const email = str('email')
+      if (email) {
+        const lower = email.toLowerCase()
+        const clash = await db.query.contacts.findFirst({ where: eq(t.contacts.email, lower) })
+        if (clash) return { ok: false, error: `${clash.firstName} ${clash.lastName} already uses ${lower}` }
+        return { ok: true, row: { ...row, email: lower } }
+      }
+      return { ok: true, row }
+    }
+
+    case 'sprints': {
+      const bad = endAfterStart('startDate', 'endDate', 'A sprint')
+      return bad ? { ok: false, error: bad } : { ok: true, row }
+    }
+
+    case 'absences': {
+      const bad = endAfterStart('startDate', 'endDate', 'An absence')
+      return bad ? { ok: false, error: bad } : { ok: true, row }
+    }
+
+    case 'projects': {
+      // Slip is measured against the baseline. Defaulting it to the target means
+      // a project that has never moved reads as zero slip rather than unknown.
+      const target = str('targetLaunch')
+      return { ok: true, row: target && !row.baselineLaunch ? { ...row, baselineLaunch: target } : row }
+    }
+
+    default:
+      return { ok: true, row }
   }
 }
 
