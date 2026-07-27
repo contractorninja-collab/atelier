@@ -7,11 +7,14 @@ import { db } from '@/db'
 import * as t from '@/db/schema'
 import { auth } from '@/auth'
 import {
-  CREATE_SPEC, MILESTONE_TEMPLATE, TARGET_METRIC_UNIT, TARGET_PERIOD_PATTERN, getTable,
+  CREATE_SPEC, TARGET_METRIC_UNIT, TARGET_PERIOD_PATTERN, getTable,
 } from '@/lib/tables'
 import { canDelete, canWrite, refusal } from '@/lib/permissions'
 import { daysBetween, normaliseDomain, toISODate } from '@/lib/format'
-import { dealMoney, invoiceState, nextInvoiceNumber, nextRenewalDate } from './compute'
+import { invoiceState, nextInvoiceNumber, nextRenewalDate } from './compute'
+// Not defined here on purpose: 'use server' would publish it as an endpoint, and
+// it has to be callable from a test with no session. See handoff.ts.
+import { spawnProjectForDeal } from './handoff'
 import type { ActionResult, TableId } from '@/lib/types'
 
 /** Every action goes through this. No session, no write. */
@@ -479,111 +482,6 @@ export async function moveDealStage(input: z.infer<typeof stageSchema>): Promise
 }
 
 /* ------------------------------------------------------------- the handoff */
-
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
-
-/** Deal types that imply delivery work. A pure subscription sale does not. */
-const DELIVERY_DEAL_TYPES = ['Project', 'Hybrid', 'Retainer']
-
-/**
- * Creates the delivery project for a won deal, plus the standard milestone set.
- *
- * Idempotent by design: a single accidental stage toggle must not spawn a
- * second project. Duplicate projects quietly corrupt every capacity and margin
- * report downstream, and nobody notices for a month.
- *
- * Returns a short human-readable summary, or null when nothing was created.
- */
-async function spawnProjectForDeal(tx: Tx, dealId: string): Promise<string | null> {
-  const deal = await tx.query.deals.findFirst({
-    where: eq(t.deals.id, dealId),
-    with: {
-      organization: { columns: { id: true, name: true } },
-      lineItems: {
-        columns: {
-          quantity: true, unitPriceCents: true, discountBps: true, billing: true,
-          estimatedDeliveryHours: true,
-        },
-      },
-    },
-  })
-  if (!deal) return null
-  if (!DELIVERY_DEAL_TYPES.includes(deal.type)) return null
-
-  const existing = await tx.query.projects.findFirst({ where: eq(t.projects.dealId, dealId) })
-  if (existing) return null
-
-  // A PM if we have one, otherwise whoever owns the deal — better an imperfect
-  // owner than an unowned project.
-  const pm = await tx.query.teamMembers.findFirst({
-    where: and(eq(t.teamMembers.department, 'Delivery'), eq(t.teamMembers.status, 'Active')),
-  })
-
-  const money = dealMoney(deal)
-  const budgetMinutes = deal.lineItems.reduce(
-    (sum, line) => sum + (line.estimatedDeliveryHours ?? 0) * 60,
-    0,
-  )
-
-  const start = new Date()
-  const startISO = start.toISOString().slice(0, 10)
-  const addDays = (days: number) =>
-    new Date(start.getTime() + days * 86_400_000).toISOString().slice(0, 10)
-
-  const lastOffset = MILESTONE_TEMPLATE[MILESTONE_TEMPLATE.length - 1].offsetDays
-  const launchISO = addDays(lastOffset)
-
-  const [project] = await tx
-    .insert(t.projects)
-    .values({
-      name: `${deal.organization?.name ?? 'Project'} — ${deal.name.split(' — ')[1] ?? 'Delivery'} — ${start.getFullYear()}`,
-      type: deal.type === 'Retainer' ? 'SupportRetainer' : 'ClientDelivery',
-      status: 'Kickoff',
-      health: 'Green',
-      organizationId: deal.organizationId,
-      dealId: deal.id,
-      portfolioProductId: deal.portfolioProductId,
-      pmId: pm?.id ?? deal.ownerId,
-      startDate: startISO,
-      targetLaunch: launchISO,
-      // Frozen now so slip is always measured against the original promise.
-      baselineLaunch: launchISO,
-      budgetMinutes,
-      contractValueCents: money.tcvCents,
-      scopeSummary: `Generated from ${deal.name} on close. Confirm scope and adjust milestone dates at kickoff.`,
-    })
-    .returning({ id: t.projects.id, name: t.projects.name })
-
-  const totalWeight = MILESTONE_TEMPLATE.reduce((sum, m) => sum + m.weightBps, 0)
-  if (totalWeight !== 10_000) {
-    // A project whose weights do not sum to 100% can never read as complete,
-    // and the reason is invisible six weeks later. Fail loudly instead.
-    throw new Error(`Milestone template weights total ${totalWeight}bps, expected 10000`)
-  }
-
-  await tx.insert(t.milestones).values(
-    MILESTONE_TEMPLATE.map((m, index) => ({
-      name: m.name,
-      projectId: project.id,
-      sequence: index + 1,
-      phase: m.phase as 'Kickoff',
-      status: 'NotStarted' as const,
-      ownerId: pm?.id ?? deal.ownerId,
-      startDate: index === 0 ? startISO : addDays(MILESTONE_TEMPLATE[index - 1].offsetDays),
-      dueDate: addDays(m.offsetDays),
-      baselineDue: addDays(m.offsetDays),
-      weightBps: m.weightBps,
-      acceptanceCriteria: m.acceptanceCriteria,
-      clientSignOffRequired: m.clientSignOffRequired,
-      paymentTrigger: m.paymentTrigger,
-      invoiceAmountCents: m.paymentTrigger
-        ? Math.round((money.tcvCents * m.weightBps) / 10_000)
-        : 0,
-    })),
-  )
-
-  return `${project.name} created with ${MILESTONE_TEMPLATE.length} milestones`
-}
 
 /**
  * Run the handoff by hand. Needed for deals that closed before Phase 2 existed,
