@@ -1,5 +1,7 @@
 node_modules
 .next
+# Alternate build directories from NEXT_DIST_DIR — see next.config.ts.
+.next-*
 out
 build
 .DS_Store

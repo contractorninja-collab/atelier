@@ -51,13 +51,27 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
     if (prefsReady && !heightTouched) setRowHeight(prefs.rowHeight)
   }, [prefsReady, prefs.rowHeight, heightTouched])
 
+  /**
+   * Reset the view when you move to a *different* table.
+   *
+   * The dependencies are primitives on purpose. `config` arrives from a server
+   * component, so every `router.refresh()` — which every successful write
+   * triggers — hands down a freshly serialised object. Depending on
+   * `config.views` therefore re-ran this on each save: the record panel closed
+   * under you the moment you finished typing in a field, and any selection went
+   * with it. Reading the two values out first makes the comparison by value,
+   * which is what "did the table change?" actually means.
+   */
+  const firstViewId = config.views[0].id
+  const firstViewGroupBy = config.views[0].groupBy ?? null
+
   useEffect(() => {
-    setViewId(config.views[0].id)
-    setGroupBy(config.views[0].groupBy ?? null)
+    setViewId(firstViewId)
+    setGroupBy(firstViewGroupBy)
     setQuery('')
     setOpenId(null)
     setSelected(new Set())
-  }, [config.id, config.views])
+  }, [config.id, firstViewId, firstViewGroupBy])
 
   useEffect(() => {
     if (!toast) return
