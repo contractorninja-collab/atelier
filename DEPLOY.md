@@ -141,6 +141,16 @@ Commit the generated file in `drizzle/`. Never edit an applied migration.
 pg_dump "$DIRECT_URL" > atelier-$(date +%F).sql
 ```
 
+**Rotating a secret.** Change it at the source (Supabase → Settings → Database → Reset password; Resend → API Keys → create new, delete old), paste the new value into `.env`, then:
+
+```bash
+bash scripts/sync-secrets.sh && npx vercel --prod
+```
+
+The script reads `.env` and pushes to Vercel over stdin — the value is never printed, never in your shell history, and never pasted into a chat window. It prints a short fingerprint instead so you can confirm the value actually changed. The redeploy matters: Vercel bakes environment variables in at build time, so the running deployment keeps the old secret until it rebuilds.
+
+Rotate whenever a value has been somewhere it should not have been — a screenshot, a support thread, a chat with an assistant, a commit that was later amended. The old value keeps working until you change it at the source; removing it from a file changes nothing.
+
 **Costs at your size.** Supabase free covers 500 MB, which is years of this data. Vercel Hobby is free for personal use but its licence does not cover commercial use — expect roughly $20 a month for Pro. Resend is free to 3,000 emails a month; magic links will not come close.
 
 **Two failure modes worth recognising.** If the app renders with no styling at all, a `next dev` run has poisoned a production `.next` directory (or the reverse) — delete `.next` and rebuild, it is not a CSS bug. And if sign-in silently returns you to the login page, the address is not in the Team table; that is the invite-only check doing its job.
