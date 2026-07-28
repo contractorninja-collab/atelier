@@ -88,10 +88,66 @@ async function recordAudit(
  * a database error message in a toast tells the user nothing and tells anyone
  * else the column names.
  */
-function failure(where: string, error: unknown, fallback: string): ActionResult {
+function failure(where: string, error: unknown, fallback: string, table?: TableId): ActionResult {
   if (error instanceof PermissionError) return { ok: false, error: error.message }
   console.error(`${where} failed`, error)
-  return { ok: false, error: fallback }
+  return { ok: false, error: duplicateMessage(error, table) ?? fallback }
+}
+
+const UNIQUE_CONSTRAINT = /unique constraint "([^"]+)"/
+
+/**
+ * Nouns for the columns people actually collide on.
+ *
+ * The field label reads badly in a sentence: products call their name column
+ * "Product", so the label alone would produce "a product with this product".
+ */
+const DUPLICATE_NOUN: Record<string, string> = {
+  name: 'name',
+  email: 'email address',
+  domain: 'domain',
+  slug: 'slug',
+  number: 'number',
+  period: 'period',
+}
+
+/**
+ * Turn a unique-constraint violation into something a person can act on.
+ *
+ * Left alone, the whole class arrives as "Could not create the record" — which
+ * names no field, suggests nothing to change, and looks exactly like a bug in
+ * whatever the person happened to touch last. The real cause was in the server
+ * log all along, which is no help to the person staring at the form.
+ *
+ * Only the constraint's own column is revealed, which the form already showed.
+ */
+function duplicateMessage(error: unknown, table?: TableId): string | null {
+  if (!table) return null
+
+  // Drizzle wraps the driver error, so the constraint name is on the cause.
+  let text = ''
+  let current: unknown = error
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    if (current instanceof Error) text += ` ${current.message}`
+    current = (current as { cause?: unknown }).cause
+  }
+
+  const constraint = text.match(UNIQUE_CONSTRAINT)?.[1]
+  if (!constraint) return null
+
+  const config = getTable(table)
+  if (!config) return null
+
+  // Constraints are named after their column. The longest field id appearing in
+  // the name is the one that collided — longest because a short id can be a
+  // substring of a longer one.
+  const field = config.fields
+    .filter((f) => constraint.includes(f.id.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)))
+    .sort((a, b) => b.id.length - a.id.length)[0]
+  if (!field) return null
+
+  const noun = DUPLICATE_NOUN[field.id] ?? field.label.toLowerCase()
+  return `A ${config.singular} with this ${noun} already exists.`
 }
 
 const TABLE_TO_DRIZZLE = {
@@ -240,7 +296,8 @@ export async function updateCell(input: z.infer<typeof cellSchema>): Promise<Act
     revalidatePath('/', 'layout')
     return { ok: true }
   } catch (error) {
-    return failure('updateCell', error, 'Update failed')
+    // input rather than parsed: the parsed value is scoped to the try block.
+    return failure('updateCell', error, 'Update failed', getTable(input.table)?.id)
   }
 }
 
@@ -294,7 +351,7 @@ export async function bulkUpdateCell(input: z.infer<typeof bulkCellSchema>): Pro
     const n = parsed.ids.length
     return { ok: true, detail: `${n} ${n === 1 ? 'record' : 'records'} updated` }
   } catch (error) {
-    return failure('bulkUpdateCell', error, 'Bulk update failed')
+    return failure('bulkUpdateCell', error, 'Bulk update failed', getTable(input.table)?.id)
   }
 }
 
@@ -808,7 +865,7 @@ export async function createRecord(input: z.infer<typeof createSchema>): Promise
       detail: `${humanLabel(created as Record<string, unknown>, config.singular)} created${ruled.note ? ` — ${ruled.note}` : ''}`,
     }
   } catch (error) {
-    return failure('createRecord', error, 'Could not create the record')
+    return failure('createRecord', error, 'Could not create the record', getTable(input.table)?.id)
   }
 }
 
