@@ -37,6 +37,16 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
   const [rowHeight, setRowHeight] = useState(prefs.rowHeight)
   const [heightTouched, setHeightTouched] = useState(false)
   const [hidden, setHidden] = useState<string[]>([])
+  /**
+   * Secondary fields the user has added as columns from the grid's + button.
+   *
+   * `secondary` means "not in the default column set", not "never showable" —
+   * but until now nothing could show one, because the visible-field filter and
+   * the Fields menu both dropped them. A product's Description existed, was
+   * editable in the record panel, and could not be made into a column by any
+   * route.
+   */
+  const [added, setAdded] = useState<string[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [openId, setOpenId] = useState<string | null>(null)
   const [menu, setMenu] = useState<MenuState>(null)
@@ -71,6 +81,9 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
     setQuery('')
     setOpenId(null)
     setSelected(new Set())
+    // Field ids repeat across tables, so a column added here would silently
+    // apply to the next table too.
+    setAdded([])
   }, [config.id, firstViewId, firstViewGroupBy])
 
   useEffect(() => {
@@ -81,8 +94,8 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
 
   const view = config.views.find((v) => v.id === viewId) ?? config.views[0]
   const visibleFields = useMemo(
-    () => config.fields.filter((f) => !f.secondary && !hidden.includes(f.id)),
-    [config.fields, hidden],
+    () => config.fields.filter((f) => (!f.secondary || added.includes(f.id)) && !hidden.includes(f.id)),
+    [config.fields, hidden, added],
   )
 
   const filtered = useMemo(() => {
@@ -258,6 +271,45 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
     [config.id, lookups, moveStage, persist],
   )
 
+  /**
+   * The grid's + button: add a column that exists but is not being shown.
+   *
+   * Two sources feed it — fields marked `secondary`, which are deliberately out
+   * of the default set, and fields hidden from the toolbar's Fields menu. Both
+   * read to the user as "a column I could have and don't", so both belong here
+   * rather than in two places that have to be found separately.
+   *
+   * It cannot invent a field. Columns are the table config, so a genuinely new
+   * one needs a migration; the menu says so instead of leaving the button doing
+   * nothing, which is what it did before.
+   */
+  const addFieldMenu = (e: React.MouseEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const available = config.fields.filter(
+      (f) => !f.primary && !visibleFields.some((v) => v.id === f.id),
+    )
+
+    setMenu({
+      // Right-aligned: the button sits at the end of a scrolled-right header,
+      // so anchoring left would open the menu off the edge.
+      x: Math.max(8, rect.right - 240),
+      y: rect.bottom + 5,
+      title: available.length ? 'Add a column' : 'No more columns',
+      items: available.length
+        ? available.map((f) => ({ value: f.id, label: f.label, icon: FIELD_ICON[f.type] }))
+        // Picking this is a no-op below; it exists so the menu explains itself
+        // rather than opening empty.
+        : [{ value: '', label: 'Every field is already shown' }],
+      onPick: (v) => {
+        if (!v) return
+        // A hidden field is un-hidden; a secondary one is opted in. Doing both
+        // is harmless and means the caller does not have to know which it was.
+        setHidden((h) => h.filter((x) => x !== v))
+        setAdded((a) => (a.includes(v) ? a : [...a, v]))
+      },
+    })
+  }
+
   const toolbarMenu = (e: React.MouseEvent, kind: 'sort' | 'group' | 'fields' | 'height') => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     const base = { x: rect.left, y: rect.bottom + 5 }
@@ -296,7 +348,9 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
       setMenu({
         ...base,
         title: 'Toggle fields',
-        items: config.fields.filter((f) => !f.primary && !f.secondary).map((f) => ({
+        // Secondary fields appear only once added, so a column you turned on
+        // from + can be turned off from the same place as every other one.
+        items: config.fields.filter((f) => !f.primary && (!f.secondary || added.includes(f.id))).map((f) => ({
           value: f.id, label: f.label, icon: FIELD_ICON[f.type], checked: !hidden.includes(f.id),
         })),
         onPick: (v) => setHidden((h) => (h.includes(v) ? h.filter((x) => x !== v) : [...h, v])),
@@ -559,6 +613,7 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
             onOpen={setOpenId}
             onEditCell={(e, row, field) => openFieldMenu(e, field, row)}
             onAdd={() => (canCreate ? setShowNew(true) : setToast({ text: 'Not creatable from here yet' }))}
+            onAddField={addFieldMenu}
           />
         ) : view.type === 'board' ? (
           <BoardView

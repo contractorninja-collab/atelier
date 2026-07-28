@@ -16,10 +16,12 @@ type Props = {
   onOpen: (id: string) => void
   onEditCell: (event: React.MouseEvent, row: Row, field: Field) => void
   onAdd: () => void
+  /** Opens the add-column menu. The + in the header was decorative before. */
+  onAddField: (e: React.MouseEvent) => void
 }
 
 export function GridView({
-  config, fields, rows, rowHeight, selected, onToggleSelect, onToggleAll, onOpen, onEditCell, onAdd,
+  config, fields, rows, rowHeight, selected, onToggleSelect, onToggleAll, onOpen, onEditCell, onAdd, onAddField,
 }: Props) {
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id))
   const someSelected = rows.some((r) => selected.has(r.id))
@@ -65,8 +67,17 @@ export function GridView({
             {f.label}
           </div>
         ))}
-        <div className="gcell" style={{ flex: '0 0 46px', width: 46, color: 'var(--ink-3)' }}>
-          <Icon name="plus" size={13} />
+        <div className="gcell" style={{ flex: '0 0 46px', width: 46, padding: 0 }}>
+          <button
+            type="button"
+            className="exp"
+            onClick={onAddField}
+            title="Add a column"
+            aria-label="Add a column"
+            style={{ color: 'var(--ink-3)', width: 46, height: '100%', opacity: 1 }}
+          >
+            <Icon name="plus" size={13} />
+          </button>
         </div>
       </div>
 
