@@ -3,7 +3,7 @@ import { auth } from '@/auth'
 import { Topbar } from '@/components/Topbar'
 import { getMyWork } from '@/server/queries'
 import { money, shortDate, tint } from '@/lib/format'
-import { DEAL_STAGE_OPTIONS } from '@/lib/tables'
+import { DEAL_STAGE_OPTIONS, TASK_STATUS } from '@/lib/tables'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,6 +38,42 @@ export default async function MyWorkPage() {
                       <span className="ls">
                         {money(deal.valueCents)}
                         {deal.closeDate ? ` · ${shortDate(deal.closeDate)}` : ''}
+                      </span>
+                    </Link>
+                  )
+                })
+              )}
+            </div>
+          </div>
+
+          <h3>Assigned to me</h3>
+          <div className="pnl">
+            <div className="pnl-b">
+              {work.tasks.length === 0 ? (
+                <p style={{ color: 'var(--ink-3)', fontSize: 12.5, margin: 0 }}>
+                  No open tasks assigned to you. Set yourself as the assignee on a task in
+                  Portfolio → Tasks and it appears here.
+                </p>
+              ) : (
+                work.tasks.map((task) => {
+                  const status = TASK_STATUS.find((o) => o.value === task.status)
+                  return (
+                    <Link className="lrow" href={`/table/tasks?record=${task.id}`} key={task.id}>
+                      {status ? (
+                        <span className="pill" style={{ background: tint(status.color, 0.15), color: status.color }}>
+                          {status.label}
+                        </span>
+                      ) : null}
+                      <span className="lt">{task.title}</span>
+                      {/* Blocked is the one thing worth interrupting the row for:
+                          it means the next move is somebody else's. */}
+                      {task.blocked ? (
+                        <span className="flag" title={task.blockedReason ?? undefined}>Blocked</span>
+                      ) : null}
+                      <span className="ls" style={task.overdue ? { color: 'var(--danger)' } : undefined}>
+                        {task.project ? `${task.project} · ` : ''}
+                        {task.priority}
+                        {task.dueDate ? ` · ${task.overdue ? 'overdue ' : ''}${shortDate(task.dueDate)}` : ''}
                       </span>
                     </Link>
                   )

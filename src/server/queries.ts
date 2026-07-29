@@ -8,7 +8,7 @@ import {
   invoiceState, isOpenStage, isOpenTask, projectFinancials, projectRollup, qualificationScore,
   riskSeverity, timeIsInvoiced,
 } from './compute'
-import { daysBetween } from '@/lib/format'
+import { daysBetween, toISODate } from '@/lib/format'
 import { TARGET_METRIC_UNIT } from '@/lib/tables'
 import { canRead, canSeeCost } from '@/lib/permissions'
 import { auth } from '@/auth'
@@ -997,13 +997,30 @@ export async function getDelivery() {
 }
 
 export async function getMyWork(memberId: string | null) {
-  if (!memberId) return { deals: [], activities: [] }
-  const [myDeals, myActs] = await Promise.all([
+  if (!memberId) return { deals: [], tasks: [], activities: [] }
+  const [myDeals, myTasks, myActs] = await Promise.all([
     db.query.deals.findMany({
       where: eq(t.deals.ownerId, memberId),
       with: {
         organization: { columns: { name: true } },
         lineItems: { columns: { quantity: true, unitPriceCents: true, discountBps: true, billing: true } },
+      },
+    }),
+    /**
+     * Tasks assigned to you.
+     *
+     * This is what most people mean by "my work", and until now nothing asked
+     * for it — assigneeId was written by the grid, displayed as a column, and
+     * never queried. So a page called My work showed you deals you own and
+     * nothing you had actually been given to do.
+     */
+    db.query.tasks.findMany({
+      where: eq(t.tasks.assigneeId, memberId),
+      with: {
+        project: { columns: { name: true } },
+        milestone: { columns: { name: true } },
+        // Portfolio work has no project — most tasks here hang off a product.
+        portfolioProduct: { columns: { name: true } },
       },
     }),
     db.query.activities.findMany({
@@ -1027,6 +1044,34 @@ export async function getMyWork(memberId: string | null) {
         flag: hygieneFlag(d),
       }))
       .sort((a, b) => b.valueCents - a.valueCents),
+    /**
+     * Ordered the way you would triage them: blocked first because somebody
+     * else has to move before you can, then overdue, then by due date, and
+     * priority only breaks ties. Sorting by priority alone buries a P2 that
+     * was due last week under a P0 due next month.
+     */
+    tasks: myTasks
+      .filter((task) => isOpenTask(task.status))
+      .map((task) => ({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        priority: task.priority,
+        blocked: task.blocked,
+        blockedReason: task.blockedReason,
+        dueDate: task.dueDate,
+        overdue: Boolean(task.dueDate && task.dueDate < toISODate(new Date())),
+        // Whichever of the three this task hangs off, so the row says where
+        // the work lives rather than showing a bare title.
+        project: task.project?.name ?? task.portfolioProduct?.name ?? task.milestone?.name ?? '',
+      }))
+      .sort((a, b) => {
+        if (a.blocked !== b.blocked) return a.blocked ? -1 : 1
+        if (a.overdue !== b.overdue) return a.overdue ? -1 : 1
+        // Undated work sits below anything with a date on it.
+        if (a.dueDate !== b.dueDate) return (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999')
+        return a.priority.localeCompare(b.priority)
+      }),
     activities: myActs.map((a) => ({
       id: a.id,
       subject: a.subject,
