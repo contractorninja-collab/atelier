@@ -3,7 +3,7 @@ import { auth } from '@/auth'
 import { Topbar } from '@/components/Topbar'
 import { getMyWork } from '@/server/queries'
 import { money, shortDate, tint } from '@/lib/format'
-import { DEAL_STAGE_OPTIONS, TASK_STATUS } from '@/lib/tables'
+import { DEAL_STAGE_OPTIONS, HEALTH, MILESTONE_STATUS, PROJECT_STATUS, TASK_STATUS } from '@/lib/tables'
 
 export const dynamic = 'force-dynamic'
 
@@ -74,6 +74,71 @@ export default async function MyWorkPage() {
                         {task.project ? `${task.project} · ` : ''}
                         {task.priority}
                         {task.dueDate ? ` · ${task.overdue ? 'overdue ' : ''}${shortDate(task.dueDate)}` : ''}
+                      </span>
+                    </Link>
+                  )
+                })
+              )}
+            </div>
+          </div>
+
+          <h3>My milestones</h3>
+          <div className="pnl">
+            <div className="pnl-b">
+              {work.milestones.length === 0 ? (
+                <p style={{ color: 'var(--ink-3)', fontSize: 12.5, margin: 0 }}>
+                  No open milestones you own. Accepted and cancelled ones drop off this list.
+                </p>
+              ) : (
+                work.milestones.map((m) => {
+                  const status = MILESTONE_STATUS.find((o) => o.value === m.status)
+                  return (
+                    <Link className="lrow" href={`/table/milestones?record=${m.id}`} key={m.id}>
+                      {status ? (
+                        <span className="pill" style={{ background: tint(status.color, 0.15), color: status.color }}>
+                          {status.label}
+                        </span>
+                      ) : null}
+                      <span className="lt">{m.name}</span>
+                      {/* Slip is against the baseline, so it survives the date
+                          being moved — which is exactly when it matters. */}
+                      {m.slipDays > 0 ? <span className="flag">{m.slipDays}d late vs baseline</span> : null}
+                      {m.signOffRequired ? <span className="flag">Client sign-off</span> : null}
+                      <span className="ls" style={m.overdue ? { color: 'var(--danger)' } : undefined}>
+                        {m.project ? `${m.project} · ` : ''}
+                        {m.dueDate ? `${m.overdue ? 'overdue ' : 'due '}${shortDate(m.dueDate)}` : 'no date'}
+                      </span>
+                    </Link>
+                  )
+                })
+              )}
+            </div>
+          </div>
+
+          <h3>Projects I run</h3>
+          <div className="pnl">
+            <div className="pnl-b">
+              {work.projects.length === 0 ? (
+                <p style={{ color: 'var(--ink-3)', fontSize: 12.5, margin: 0 }}>
+                  You are not the PM on any open project.
+                </p>
+              ) : (
+                work.projects.map((p) => {
+                  const status = PROJECT_STATUS.find((o) => o.value === p.status)
+                  const health = HEALTH.find((o) => o.value === p.health)
+                  return (
+                    <Link className="lrow" href={`/project/${p.id}`} key={p.id}>
+                      {health ? (
+                        <span className="pill" style={{ background: tint(health.color, 0.15), color: health.color }}>
+                          {health.label}
+                        </span>
+                      ) : null}
+                      <span className="lt">{p.name}</span>
+                      {p.slipDays > 0 ? <span className="flag">{p.slipDays}d slip</span> : null}
+                      <span className="ls" style={p.late ? { color: 'var(--danger)' } : undefined}>
+                        {p.client ? `${p.client} · ` : ''}
+                        {status?.label ?? p.status}
+                        {p.targetLaunch ? ` · ${p.late ? 'was due ' : 'launch '}${shortDate(p.targetLaunch)}` : ''}
                       </span>
                     </Link>
                   )

@@ -996,9 +996,13 @@ export async function getDelivery() {
   }
 }
 
+/** Milestones and projects that are still somebody's problem. */
+const CLOSED_MILESTONE_STATUSES = ['Accepted', 'Cancelled']
+const CLOSED_PROJECT_STATUSES = ['Closed', 'Cancelled']
+
 export async function getMyWork(memberId: string | null) {
-  if (!memberId) return { deals: [], tasks: [], activities: [] }
-  const [myDeals, myTasks, myActs] = await Promise.all([
+  if (!memberId) return { deals: [], tasks: [], milestones: [], projects: [], activities: [] }
+  const [myDeals, myTasks, myMilestones, myProjects, myActs] = await Promise.all([
     db.query.deals.findMany({
       where: eq(t.deals.ownerId, memberId),
       with: {
@@ -1023,6 +1027,19 @@ export async function getMyWork(memberId: string | null) {
         portfolioProduct: { columns: { name: true } },
       },
     }),
+    /**
+     * Milestones you own. Delivered still counts as yours — it is not off your
+     * desk until the client accepts it, and chasing that acceptance is the job.
+     */
+    db.query.milestones.findMany({
+      where: eq(t.milestones.ownerId, memberId),
+      with: { project: { columns: { name: true } } },
+    }),
+    // Projects you are PM of.
+    db.query.projects.findMany({
+      where: eq(t.projects.pmId, memberId),
+      with: { organization: { columns: { name: true } } },
+    }),
     db.query.activities.findMany({
       where: eq(t.activities.ownerId, memberId),
       orderBy: [desc(t.activities.occurredAt)],
@@ -1030,6 +1047,8 @@ export async function getMyWork(memberId: string | null) {
       with: { organization: { columns: { name: true } } },
     }),
   ])
+
+  const today = toISODate(new Date())
 
   return {
     deals: myDeals
@@ -1060,7 +1079,7 @@ export async function getMyWork(memberId: string | null) {
         blocked: task.blocked,
         blockedReason: task.blockedReason,
         dueDate: task.dueDate,
-        overdue: Boolean(task.dueDate && task.dueDate < toISODate(new Date())),
+        overdue: Boolean(task.dueDate && task.dueDate < today),
         // Whichever of the three this task hangs off, so the row says where
         // the work lives rather than showing a bare title.
         project: task.project?.name ?? task.portfolioProduct?.name ?? task.milestone?.name ?? '',
@@ -1071,6 +1090,55 @@ export async function getMyWork(memberId: string | null) {
         // Undated work sits below anything with a date on it.
         if (a.dueDate !== b.dueDate) return (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999')
         return a.priority.localeCompare(b.priority)
+      }),
+    /**
+     * Blocked first, then late, then by due date. A milestone that has slipped
+     * past its baseline is called out separately from being late, because the
+     * date on it may already have been moved — the baseline is the promise.
+     */
+    milestones: myMilestones
+      .filter((m) => !CLOSED_MILESTONE_STATUSES.includes(m.status))
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        status: m.status,
+        project: m.project?.name ?? '',
+        dueDate: m.dueDate,
+        overdue: Boolean(m.dueDate && m.dueDate < today && m.status !== 'Delivered'),
+        slipDays: m.dueDate && m.baselineDue ? daysBetween(m.baselineDue, m.dueDate) : 0,
+        signOffRequired: m.clientSignOffRequired,
+      }))
+      .sort((a, b) => {
+        const blocked = (x: typeof a) => (x.status === 'Blocked' ? 0 : 1)
+        if (blocked(a) !== blocked(b)) return blocked(a) - blocked(b)
+        if (a.overdue !== b.overdue) return a.overdue ? -1 : 1
+        return (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999')
+      }),
+    /**
+     * Projects you run, worst health first. Red before Amber before Green is
+     * the only ordering a PM wants: the healthy ones are not the reason you
+     * opened the page.
+     */
+    projects: myProjects
+      .filter((p) => !CLOSED_PROJECT_STATUSES.includes(p.status))
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        status: p.status,
+        health: p.health,
+        healthNote: p.healthNote,
+        client: p.organization?.name ?? '',
+        targetLaunch: p.targetLaunch,
+        late: Boolean(p.targetLaunch && p.targetLaunch < today),
+        // Against the baseline, not the current target — a target that keeps
+        // moving always looks on time.
+        slipDays: p.targetLaunch && p.baselineLaunch ? daysBetween(p.baselineLaunch, p.targetLaunch) : 0,
+      }))
+      .sort((a, b) => {
+        const rank = { Red: 0, Amber: 1, Green: 2 } as Record<string, number>
+        const byHealth = (rank[a.health] ?? 3) - (rank[b.health] ?? 3)
+        if (byHealth !== 0) return byHealth
+        return (a.targetLaunch ?? '9999').localeCompare(b.targetLaunch ?? '9999')
       }),
     activities: myActs.map((a) => ({
       id: a.id,

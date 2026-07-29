@@ -369,7 +369,7 @@ const MILESTONE_PHASE = opts(
   ['PostLaunchReview', 'Post-launch review', C.gray],
 )
 
-const MILESTONE_STATUS = opts(
+export const MILESTONE_STATUS = opts(
   ['NotStarted', 'Not started', C.gray],
   ['InProgress', 'In progress', C.amber],
   ['Blocked', 'Blocked', C.rose],
