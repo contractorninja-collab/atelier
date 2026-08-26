@@ -57,16 +57,20 @@ function makeDb() {
        * Small, but not one.
        *
        * On Vercel each request may be its own instance, so the pool size is
-       * multiplied by concurrency — ten was enough to make Supabase's pooler
-       * refuse connections under the burst Next fires when it prefetches the
-       * sidebar links. One is the opposite mistake: a single page calls
-       * getLookups, which issues a dozen queries in parallel, and they would
-       * queue behind each other on the only connection.
+       * multiplied by concurrency against the session pooler's hard cap of
+       * fifteen clients. Deploys are the crunch point: fresh instances cold
+       * start while the previous deployment's instances still hold their
+       * connections, and at five per instance three of them fill the pooler —
+       * which is exactly what EMAXCONNSESSION'd the first request after the
+       * Traction deploy.
        *
-       * Five lets that fan-out pipeline while keeping the per-instance
-       * footprint low enough for the transaction pooler to absorb.
+       * Five dated from when getLookups fired a dozen queries in parallel.
+       * That fan-out is one UNION now, so the widest per-request burst left is
+       * a dashboard's Promise.all — three connections pipeline that fine, and
+       * fifteen divided by three means five concurrent instances instead of
+       * three before the pooler says no.
        */
-      max: process.env.NODE_ENV === 'production' ? 5 : 3,
+      max: 3,
       /**
        * Recycle sockets aggressively, because serverless instances get frozen.
        *
