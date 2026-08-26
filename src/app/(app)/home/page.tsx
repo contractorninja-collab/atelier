@@ -86,7 +86,7 @@ export default async function HomePage() {
             <div className="pnl">
               <div className="pnl-h">
                 <span className="t">By stage</span>
-                <Link className="a" href="/table/deals">Open pipeline →</Link>
+                <Link prefetch={false} className="a" href="/table/deals">Open pipeline →</Link>
               </div>
               <div className="pnl-b">
                 <div className="funnel">
@@ -110,7 +110,7 @@ export default async function HomePage() {
             <div className="pnl">
               <div className="pnl-h">
                 <span className="t">Needs attention</span>
-                <Link className="a" href="/table/deals">All deals →</Link>
+                <Link prefetch={false} className="a" href="/table/deals">All deals →</Link>
               </div>
               <div className="pnl-b">
                 {d.attention.length === 0 ? (
@@ -119,7 +119,7 @@ export default async function HomePage() {
                   </p>
                 ) : (
                   d.attention.map((a) => (
-                    <Link className="lrow" href={`/table/deals?record=${a.id}`} key={a.id}>
+                    <Link prefetch={false} className="lrow" href={`/table/deals?record=${a.id}`} key={a.id}>
                       <span className="hdot" style={{ background: 'var(--accent)' }} />
                       <span className="lt">{a.name}</span>
                       <span className="ls">{a.flag}</span>
@@ -135,7 +135,7 @@ export default async function HomePage() {
             <div className="pnl">
               <div className="pnl-h">
                 <span className="t">Money owed</span>
-                <Link className="a" href="/table/invoices">Invoices →</Link>
+                <Link prefetch={false} className="a" href="/table/invoices">Invoices →</Link>
               </div>
               <div className="pnl-b">
                 {d.overdue.length === 0 ? (
@@ -145,7 +145,7 @@ export default async function HomePage() {
                 ) : (
                   <>
                     {d.overdue.map((i) => (
-                      <Link className="lrow" href={`/table/invoices?record=${i.id}`} key={i.id}>
+                      <Link prefetch={false} className="lrow" href={`/table/invoices?record=${i.id}`} key={i.id}>
                         <span
                           className="hdot"
                           style={{ background: i.daysOverdue > 60 ? 'var(--danger)' : i.daysOverdue > 30 ? 'var(--accent-600)' : 'var(--accent)' }}
@@ -176,7 +176,7 @@ export default async function HomePage() {
             <div className="pnl">
               <div className="pnl-h">
                 <span className="t">Renewals — next 90 days</span>
-                <Link className="a" href="/table/subscriptions">Subscriptions →</Link>
+                <Link prefetch={false} className="a" href="/table/subscriptions">Subscriptions →</Link>
               </div>
               <div className="pnl-b">
                 {d.renewals.length === 0 ? (
@@ -185,7 +185,7 @@ export default async function HomePage() {
                   </p>
                 ) : (
                   d.renewals.map((r) => (
-                    <Link className="lrow" href={`/table/subscriptions?record=${r.id}`} key={r.id}>
+                    <Link prefetch={false} className="lrow" href={`/table/subscriptions?record=${r.id}`} key={r.id}>
                       <span className="hdot" style={{ background: r.days < 0 ? 'var(--danger)' : r.days <= 30 ? 'var(--accent)' : 'var(--brand)' }} />
                       <span className="lt">{r.org}</span>
                       <span className="ls">
@@ -207,7 +207,7 @@ export default async function HomePage() {
           <div className="pnl">
             <div className="pnl-h">
               <span className="t">What each product earns, and what it costs to build</span>
-              <Link className="a" href="/table/portfolio">Portfolio →</Link>
+              <Link prefetch={false} className="a" href="/table/portfolio">Portfolio →</Link>
             </div>
             <div className="pnl-b">
               {delivery.portfolio.length === 0 ? (
@@ -264,7 +264,7 @@ export default async function HomePage() {
             <div className="pnl">
               <div className="pnl-h">
                 <span className="t">Project health</span>
-                <Link className="a" href="/table/projects">Delivery board →</Link>
+                <Link prefetch={false} className="a" href="/table/projects">Delivery board →</Link>
               </div>
               <div className="pnl-b">
                 {delivery.projects.length === 0 ? (
@@ -273,7 +273,7 @@ export default async function HomePage() {
                   </p>
                 ) : (
                   delivery.projects.map((p) => (
-                    <Link className="lrow" href={`/project/${p.id}`} key={p.id}>
+                    <Link prefetch={false} className="lrow" href={`/project/${p.id}`} key={p.id}>
                       <span className="hdot" style={{ background: HEALTH_COLOUR[p.health] }} />
                       <span className="lt">{p.name}</span>
                       {p.warning ? <span className="flag">{p.warning}</span> : null}
@@ -295,7 +295,7 @@ export default async function HomePage() {
             <div className="pnl">
               <div className="pnl-h">
                 <span className="t">Capacity this week</span>
-                <Link className="a" href="/table/allocations">Allocations →</Link>
+                <Link prefetch={false} className="a" href="/table/allocations">Allocations →</Link>
               </div>
               <div className="pnl-b">
                 {delivery.capacity.map((c) => {
@@ -327,14 +327,14 @@ export default async function HomePage() {
               <div className="pnl">
                 <div className="pnl-h">
                   <span className="t">Blocked work</span>
-                  <Link className="a" href="/table/tasks">Board →</Link>
+                  <Link prefetch={false} className="a" href="/table/tasks">Board →</Link>
                 </div>
                 <div className="pnl-b">
                   {delivery.blockedTasks.length === 0 ? (
                     <p style={{ color: 'var(--ink-3)', fontSize: 12.5, margin: 0 }}>Nothing blocked.</p>
                   ) : (
                     delivery.blockedTasks.map((task) => (
-                      <Link className="lrow" href={`/table/tasks?record=${task.id}`} key={task.id}>
+                      <Link prefetch={false} className="lrow" href={`/table/tasks?record=${task.id}`} key={task.id}>
                         <span className="hdot" style={{ background: 'var(--danger)' }} />
                         <span className="lt">{task.title}</span>
                         <span className="ls">{task.blockedReason ?? 'Blocked'}</span>
@@ -347,14 +347,14 @@ export default async function HomePage() {
               <div className="pnl">
                 <div className="pnl-h">
                   <span className="t">Open risks</span>
-                  <Link className="a" href="/table/risks">Register →</Link>
+                  <Link prefetch={false} className="a" href="/table/risks">Register →</Link>
                 </div>
                 <div className="pnl-b">
                   {delivery.risks.length === 0 ? (
                     <p style={{ color: 'var(--ink-3)', fontSize: 12.5, margin: 0 }}>Register is clear.</p>
                   ) : (
                     delivery.risks.map((r) => (
-                      <Link className="lrow" href={`/table/risks?record=${r.id}`} key={r.id}>
+                      <Link prefetch={false} className="lrow" href={`/table/risks?record=${r.id}`} key={r.id}>
                         <span
                           className="hdot"
                           style={{ background: r.severity >= 6 ? 'var(--danger)' : r.severity >= 4 ? 'var(--accent)' : 'var(--ink-3)' }}
@@ -376,7 +376,7 @@ export default async function HomePage() {
                 <p style={{ color: 'var(--ink-3)', fontSize: 12.5, margin: 0 }}>Nothing logged yet.</p>
               ) : (
                 d.recent.map((a) => (
-                  <Link className="lrow" href={`/table/activities?record=${a.id}`} key={a.id}>
+                  <Link prefetch={false} className="lrow" href={`/table/activities?record=${a.id}`} key={a.id}>
                     <Avatar name={a.owner} size={24} />
                     <span className="lt">{a.subject}</span>
                     <span className="ls">{a.org ? `${a.org} · ` : ''}{shortDate(a.date)}</span>

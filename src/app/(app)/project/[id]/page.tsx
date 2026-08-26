@@ -43,12 +43,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             <span className="hdot" style={{ background: HEALTH_COLOUR[p.health] ?? 'var(--ink-3)', width: 10, height: 10 }} />
             <span className="pj-status">{p.status}</span>
             {p.client ? (
-              <Link className="pj-link" href={`/table/clients?record=${p.client.id}`}>
+              <Link prefetch={false} className="pj-link" href={`/table/clients?record=${p.client.id}`}>
                 <Icon name="users" size={13} />{p.client.name}
               </Link>
             ) : null}
             {p.deal ? (
-              <Link className="pj-link" href={`/table/deals?record=${p.deal.id}`}>
+              <Link prefetch={false} className="pj-link" href={`/table/deals?record=${p.deal.id}`}>
                 <Icon name="euro" size={13} />{p.deal.name}
               </Link>
             ) : null}
@@ -140,7 +140,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             <div className="pnl">
               <div className="pnl-h">
                 <span className="t">Milestones</span>
-                <Link className="a" href="/table/milestones">All milestones →</Link>
+                <Link prefetch={false} className="a" href="/table/milestones">All milestones →</Link>
               </div>
               <div className="pnl-b">
                 {p.milestones.length === 0 ? (
@@ -190,14 +190,14 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             <div className="pnl">
               <div className="pnl-h">
                 <span className="t">Invoices</span>
-                <Link className="a" href="/table/invoices">All invoices →</Link>
+                <Link prefetch={false} className="a" href="/table/invoices">All invoices →</Link>
               </div>
               <div className="pnl-b">
                 {p.invoices.length === 0 ? (
                   <Empty>Nothing invoiced against this project yet.</Empty>
                 ) : (
                   p.invoices.map((i) => (
-                    <Link className="lrow" href={`/table/invoices?record=${i.id}`} key={i.id}>
+                    <Link prefetch={false} className="lrow" href={`/table/invoices?record=${i.id}`} key={i.id}>
                       <span className="hdot" style={{
                         background: i.state === 'Overdue' ? 'var(--danger)'
                           : i.state === 'Paid' ? 'var(--brand)'
@@ -261,7 +261,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             <div className="pnl">
               <div className="pnl-h">
                 <span className="t">In the way</span>
-                <Link className="a" href="/table/risks">Register →</Link>
+                <Link prefetch={false} className="a" href="/table/risks">Register →</Link>
               </div>
               <div className="pnl-b">
                 {p.risks.length === 0 && p.blockedTasks.length === 0 ? (
@@ -269,7 +269,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
                 ) : (
                   <>
                     {p.risks.map((r) => (
-                      <Link className="lrow" href={`/table/risks?record=${r.id}`} key={r.id}>
+                      <Link prefetch={false} className="lrow" href={`/table/risks?record=${r.id}`} key={r.id}>
                         <span className="hdot" style={{
                           background: r.severity >= 6 ? 'var(--danger)' : r.severity >= 4 ? 'var(--accent)' : 'var(--ink-3)',
                         }} />
@@ -278,7 +278,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
                       </Link>
                     ))}
                     {p.blockedTasks.map((task) => (
-                      <Link className="lrow" href={`/table/tasks?record=${task.id}`} key={task.id}>
+                      <Link prefetch={false} className="lrow" href={`/table/tasks?record=${task.id}`} key={task.id}>
                         <span className="hdot" style={{ background: 'var(--accent)' }} />
                         <span className="lt">{task.title}</span>
                         <span className="ls">{task.reason ?? 'Blocked'}</span>
@@ -296,7 +296,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               <div className="pnl">
                 <div className="pnl-b">
                   {p.changeRequests.map((c) => (
-                    <Link className="lrow" href={`/table/changeRequests?record=${c.id}`} key={c.id}>
+                    <Link prefetch={false} className="lrow" href={`/table/changeRequests?record=${c.id}`} key={c.id}>
                       <span className="hdot" style={{ background: c.status === 'Approved' ? 'var(--brand)' : 'var(--accent)' }} />
                       <span className="lt">{c.title}</span>
                       <span className="ls">

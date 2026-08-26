@@ -121,7 +121,7 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
                       return (
                         <div className="lrow" key={rock.id} style={{ cursor: 'default' }}>
                           {rs ? (
-                            <Link
+                            <Link prefetch={false}
                               className="pill" href={`/table/rocks?record=${rock.id}`}
                               style={{ background: tint(rs.color, 0.15), color: rs.color }}
                             >

@@ -61,16 +61,16 @@ export function Sidebar({
       </button>
 
       <div className="sb-scroll">
-        <Link href="/home" className={`nav-i ${pathname === '/home' ? 'active' : ''}`}>
+        <Link prefetch={false} href="/home" className={`nav-i ${pathname === '/home' ? 'active' : ''}`}>
           <span className="ic"><Icon name="home" size={15} /></span>
           <span className="hide-c">Home</span>
         </Link>
-        <Link href="/my-work" className={`nav-i ${pathname === '/my-work' ? 'active' : ''}`}>
+        <Link prefetch={false} href="/my-work" className={`nav-i ${pathname === '/my-work' ? 'active' : ''}`}>
           <span className="ic"><Icon name="check" size={15} /></span>
           <span className="hide-c">My work</span>
         </Link>
 
-        <Link href="/import" className={`nav-i ${pathname === '/import' ? 'active' : ''}`}>
+        <Link prefetch={false} href="/import" className={`nav-i ${pathname === '/import' ? 'active' : ''}`}>
           <span className="ic"><Icon name="arrow" size={15} /></span>
           <span className="hide-c">Import data</span>
         </Link>
@@ -89,7 +89,7 @@ export function Sidebar({
                 const table = TABLES[id as TableId]
                 const href = `/table/${id}`
                 return (
-                  <Link href={href} key={id} className={`nav-i ${pathname === href ? 'active' : ''}`}>
+                  <Link prefetch={false} href={href} key={id} className={`nav-i ${pathname === href ? 'active' : ''}`}>
                     <span className="ic"><Icon name={table.icon} size={14} /></span>
                     <span className="hide-c">{table.name}</span>
                     {counts[id as TableId] !== undefined ? (

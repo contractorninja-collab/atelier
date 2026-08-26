@@ -76,13 +76,13 @@ export function RecordPanel({ config, row, lookups, onClose, onChange, onOpenRec
                 </button>
                 {/* A project has a page of its own; the panel is the summary. */}
                 {config.id === 'projects' ? (
-                  <Link className="over-open" href={`/project/${row.id}`}>
+                  <Link prefetch={false} className="over-open" href={`/project/${row.id}`}>
                     Open project <Icon name="arrow" size={12} />
                   </Link>
                 ) : null}
                 {/* A meeting is run from its page, not edited in a grid. */}
                 {config.id === 'meetings' ? (
-                  <Link className="over-open" href={`/meeting/${row.id}`}>
+                  <Link prefetch={false} className="over-open" href={`/meeting/${row.id}`}>
                     Open meeting <Icon name="arrow" size={12} />
                   </Link>
                 ) : null}

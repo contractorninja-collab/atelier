@@ -19,7 +19,7 @@ export default function NotFound() {
         <p style={{ color: 'var(--ink-2)', fontSize: 13, lineHeight: 1.6, margin: '0 0 20px' }}>
           That page does not exist. It may have been a table that has since been renamed.
         </p>
-        <Link className="btn pri" href="/home">Back to Home</Link>
+        <Link prefetch={false} className="btn pri" href="/home">Back to Home</Link>
       </div>
     </div>
   )

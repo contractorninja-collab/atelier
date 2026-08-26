@@ -96,11 +96,11 @@ export function UserMenu({
 
       <div className="um-sep" />
 
-      <Link className="menu-i" href="/table/team" onClick={onClose}>
+      <Link prefetch={false} className="menu-i" href="/table/team" onClick={onClose}>
         <Icon name="users" size={14} />
         <span>Manage team</span>
       </Link>
-      <Link className="menu-i" href="/health" onClick={onClose}>
+      <Link prefetch={false} className="menu-i" href="/health" onClick={onClose}>
         <Icon name="warn" size={14} />
         <span>Health check</span>
       </Link>

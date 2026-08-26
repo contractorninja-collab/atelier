@@ -27,7 +27,7 @@ export default async function MyWorkPage() {
                 work.deals.map((deal) => {
                   const option = DEAL_STAGE_OPTIONS.find((o) => o.value === deal.stage)
                   return (
-                    <Link className="lrow" href={`/table/deals?record=${deal.id}`} key={deal.id}>
+                    <Link prefetch={false} className="lrow" href={`/table/deals?record=${deal.id}`} key={deal.id}>
                       {option ? (
                         <span className="pill" style={{ background: tint(option.color, 0.15), color: option.color }}>
                           {option.label}
@@ -58,7 +58,7 @@ export default async function MyWorkPage() {
                 work.tasks.map((task) => {
                   const status = TASK_STATUS.find((o) => o.value === task.status)
                   return (
-                    <Link className="lrow" href={`/table/tasks?record=${task.id}`} key={task.id}>
+                    <Link prefetch={false} className="lrow" href={`/table/tasks?record=${task.id}`} key={task.id}>
                       {status ? (
                         <span className="pill" style={{ background: tint(status.color, 0.15), color: status.color }}>
                           {status.label}
@@ -93,7 +93,7 @@ export default async function MyWorkPage() {
                 work.milestones.map((m) => {
                   const status = MILESTONE_STATUS.find((o) => o.value === m.status)
                   return (
-                    <Link className="lrow" href={`/table/milestones?record=${m.id}`} key={m.id}>
+                    <Link prefetch={false} className="lrow" href={`/table/milestones?record=${m.id}`} key={m.id}>
                       {status ? (
                         <span className="pill" style={{ background: tint(status.color, 0.15), color: status.color }}>
                           {status.label}
@@ -127,7 +127,7 @@ export default async function MyWorkPage() {
                   const status = PROJECT_STATUS.find((o) => o.value === p.status)
                   const health = HEALTH.find((o) => o.value === p.health)
                   return (
-                    <Link className="lrow" href={`/project/${p.id}`} key={p.id}>
+                    <Link prefetch={false} className="lrow" href={`/project/${p.id}`} key={p.id}>
                       {health ? (
                         <span className="pill" style={{ background: tint(health.color, 0.15), color: health.color }}>
                           {health.label}
@@ -154,7 +154,7 @@ export default async function MyWorkPage() {
                 <p style={{ color: 'var(--ink-3)', fontSize: 12.5, margin: 0 }}>No activity logged yet.</p>
               ) : (
                 work.activities.map((a) => (
-                  <Link className="lrow" href={`/table/activities?record=${a.id}`} key={a.id}>
+                  <Link prefetch={false} className="lrow" href={`/table/activities?record=${a.id}`} key={a.id}>
                     <span className="lt">{a.subject}</span>
                     <span className="ls">
                       {a.org ? `${a.org} · ` : ''}

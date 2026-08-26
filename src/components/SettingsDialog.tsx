@@ -49,7 +49,7 @@ export function SettingsDialog({
             </button>
           ))}
           <div style={{ marginTop: 'auto', padding: 10 }}>
-            <Link className="st-link" href="/table/team" onClick={onClose}>
+            <Link prefetch={false} className="st-link" href="/table/team" onClick={onClose}>
               Manage the whole team →
             </Link>
           </div>
@@ -313,7 +313,7 @@ function AccountSection({ profile }: { profile: MyProfile | null }) {
 
       <p className="st-note">
         There is no password to change: Atelier signs you in with a magic link or
-        Google, so credentials live with those providers. <Link className="st-link" href="/health">
+        Google, so credentials live with those providers. <Link prefetch={false} className="st-link" href="/health">
         The health check</Link> reports which providers are actually configured.
       </p>
     </Section>
