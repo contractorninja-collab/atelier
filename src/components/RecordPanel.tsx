@@ -80,6 +80,12 @@ export function RecordPanel({ config, row, lookups, onClose, onChange, onOpenRec
                     Open project <Icon name="arrow" size={12} />
                   </Link>
                 ) : null}
+                {/* A meeting is run from its page, not edited in a grid. */}
+                {config.id === 'meetings' ? (
+                  <Link className="over-open" href={`/meeting/${row.id}`}>
+                    Open meeting <Icon name="arrow" size={12} />
+                  </Link>
+                ) : null}
               </div>
             </div>
 

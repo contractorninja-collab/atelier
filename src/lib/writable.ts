@@ -93,6 +93,13 @@ export const WRITABLE: Record<TableId, string[]> = {
   payments: ['invoiceId', 'paidOn', 'amountCents', 'method', 'reference', 'notes'],
   /** Append-only. An audit trail you can edit is not an audit trail. */
   audit: [],
+  // status is deliberately absent — see READ_ONLY_BY_DESIGN.
+  meetings: ['type', 'heldOn', 'ownerId', 'durationMinutes', 'headlines', 'cascadingMessages', 'notes'],
+  rocks: ['title', 'quarter', 'scope', 'status', 'ownerId', 'dueDate', 'notes'],
+  measurables: ['name', 'ownerId', 'unit', 'goalValue', 'direction', 'active', 'sequence', 'notes'],
+  scorecardEntries: ['measurableId', 'weekStarting', 'value', 'notes'],
+  todos: ['title', 'ownerId', 'done', 'dueDate', 'meetingId', 'notes'],
+  issues: ['title', 'status', 'ownerId', 'solvedInMeetingId', 'notes'],
 }
 
 /**
@@ -105,5 +112,8 @@ export const WRITABLE: Record<TableId, string[]> = {
 export const READ_ONLY_BY_DESIGN: Partial<Record<TableId, Record<string, string>>> = {
   deals: {
     stage: 'Goes through moveDealStage, which stamps stageEnteredAt and appends to deal_stage_history. A plain write would lose both.',
+  },
+  meetings: {
+    status: 'Goes through startMeeting/concludeMeeting, which stamp startedAt, concludedAt and the rating — a plain write would lose all three.',
   },
 }

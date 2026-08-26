@@ -11,6 +11,7 @@ import { drizzle as drizzlePglite } from 'drizzle-orm/pglite'
 import { PGlite } from '@electric-sql/pglite'
 import postgres from 'postgres'
 import * as s from './schema'
+import { quarterOf } from '../server/compute'
 
 // Seeds whichever database the app is pointed at — the built-in local one
 // when ATELIER_LOCAL_DB is set, a real Postgres otherwise.
@@ -43,6 +44,12 @@ const euros = (n: number) => Math.round(n * 100)
 async function main() {
   console.log('Clearing CRM tables…')
   // Phase 2 first — these reference Phase 1 rows.
+  await db.delete(s.scorecardEntries)
+  await db.delete(s.eosTodos)
+  await db.delete(s.eosIssues)
+  await db.delete(s.meetings)
+  await db.delete(s.rocks)
+  await db.delete(s.measurables)
   await db.delete(s.timeEntries)
   await db.delete(s.allocations)
   await db.delete(s.absences)
@@ -632,6 +639,101 @@ async function main() {
     // Part payment against a debt that is already late — outstanding, not settled.
     { invoiceId: inv('INV-2026-052'), paidOn: inDays(-5), amountCents: euros(3_000), method: 'Transfer', reference: 'INTESA-2291' },
     { invoiceId: inv('INV-2026-047'), paidOn: inDays(-1), amountCents: euros(500), method: 'Card', reference: 'STRIPE-ch_2Kd' },
+  ])
+
+  console.log('Traction…')
+  // `monday(offset)` from the allocations block above: the Monday of week
+  // offset n — 0 this week, -1 last week, +1 next.
+  const thisQuarter = quarterOf(new Date().toISOString().slice(0, 10))
+
+  const measurables = await db.insert(s.measurables).values([
+    { name: 'Weekly cash collected', unit: 'Money', direction: 'AtLeast', goalValue: euros(12_000), ownerId: florian, sequence: 1, notes: 'Sum of payments recorded this week.' },
+    { name: 'Proposals sent', unit: 'Count', direction: 'AtLeast', goalValue: 3, ownerId: marta, sequence: 2 },
+    { name: 'Billable utilisation', unit: 'Percent', direction: 'AtLeast', goalValue: 7_500, ownerId: anna, sequence: 3, notes: 'From the capacity space, Friday snapshot.' },
+    { name: 'Overdue receivables', unit: 'Money', direction: 'AtMost', goalValue: euros(10_000), ownerId: florian, sequence: 4 },
+    { name: 'Open support tickets', unit: 'Count', direction: 'AtMost', goalValue: 15, ownerId: luca, sequence: 5 },
+    { name: 'Demos booked', unit: 'Count', direction: 'AtLeast', goalValue: 2, ownerId: marta, sequence: 6 },
+  ]).returning()
+  const meas = (n: string) => measurables.find((x) => x.name === n)!.id
+
+  // Thirteen weeks per measurable, with deliberate misses so the matrix shows
+  // red cells and no hit rate reads a flattering 100%.
+  const weekly: { name: string; values: number[] }[] = [
+    { name: 'Weekly cash collected', values: [13_500, 12_800, 9_200, 14_100, 12_050, 8_400, 13_900, 15_200, 12_300, 11_800, 16_400, 12_900, 13_100].map(euros) },
+    { name: 'Proposals sent', values: [3, 4, 2, 3, 5, 3, 1, 4, 3, 2, 3, 4, 3] },
+    { name: 'Billable utilisation', values: [7_800, 7_600, 7_100, 8_000, 7_700, 6_900, 7_500, 7_900, 8_100, 7_400, 7_200, 7_600, 7_800] },
+    { name: 'Overdue receivables', values: [8_200, 9_100, 11_400, 9_800, 8_700, 12_600, 9_300, 8_100, 9_900, 13_200, 11_100, 9_600, 9_200].map(euros) },
+    { name: 'Open support tickets', values: [12, 14, 17, 13, 11, 16, 12, 10, 13, 14, 18, 12, 11] },
+    { name: 'Demos booked', values: [2, 3, 1, 2, 4, 2, 2, 3, 1, 2, 2, 3, 2] },
+  ]
+  await db.insert(s.scorecardEntries).values(
+    weekly.flatMap((row) =>
+      row.values.map((value, index) => ({
+        measurableId: meas(row.name),
+        // Oldest first: index 0 is twelve weeks back, the last is this week.
+        weekStarting: monday(index - 12),
+        value,
+      })),
+    ),
+  )
+
+  console.log('Rocks & meetings…')
+  await db.insert(s.rocks).values([
+    { title: 'Ship SEPA payouts to production', quarter: thisQuarter, scope: 'Company', status: 'OnTrack', ownerId: jakub, dueDate: inDays(40) },
+    { title: 'Sign two Scale-tier customers', quarter: thisQuarter, scope: 'Company', status: 'OffTrack', ownerId: florian, dueDate: inDays(40) },
+    { title: 'Hire a CSM', quarter: thisQuarter, scope: 'Individual', status: 'OffTrack', ownerId: marta, dueDate: inDays(30) },
+    { title: 'Document the onboarding runbook', quarter: thisQuarter, scope: 'Individual', status: 'Done', ownerId: anna, dueDate: inDays(-10) },
+    { title: 'Cut deploy time under ten minutes', quarter: thisQuarter, scope: 'Individual', status: 'OnTrack', ownerId: piotr, dueDate: inDays(45) },
+  ])
+
+  const meetings = await db.insert(s.meetings).values([
+    // Eight concluded L10s, newest last week — the ratings feed the average.
+    ...[8, 7, 6, 5, 4, 3, 2, 1].map((weeksBack, index) => ({
+      type: 'L10' as const,
+      heldOn: monday(-weeksBack),
+      status: 'Concluded' as const,
+      ownerId: florian,
+      durationMinutes: 90,
+      rating: [7, 8, 8, 7, 9, 8, 7, 8][index],
+      startedAt: new Date(Date.parse(monday(-weeksBack)) + 9 * 3_600_000),
+      concludedAt: new Date(Date.parse(monday(-weeksBack)) + 10.5 * 3_600_000),
+      ...(weeksBack === 1
+        ? {
+            headlines: 'Aurora Bank legal call went well. Café Milano renewed without a nudge.',
+            cascadingMessages: 'Tell delivery the Nordwind UAT window moved a week.',
+          }
+        : {}),
+    })),
+    { type: 'Quarterly', heldOn: monday(-9), status: 'Concluded', ownerId: florian, durationMinutes: 480, rating: 9, startedAt: new Date(Date.parse(monday(-9)) + 8 * 3_600_000), concludedAt: new Date(Date.parse(monday(-9)) + 16 * 3_600_000) },
+    // The demo target: next Monday's L10, ready to open and run.
+    { type: 'L10', heldOn: monday(1), status: 'Scheduled', ownerId: florian, durationMinutes: 90 },
+  ]).returning()
+  const lastL10 = meetings.find((m) => m.heldOn === monday(-1))!.id
+
+  console.log('To-dos & issues…')
+  await db.insert(s.eosTodos).values([
+    { title: 'Send Aurora the revised redlines', ownerId: florian, dueDate: inDays(-4), done: true, meetingId: lastL10 },
+    { title: 'Book the Vantis pricing call', ownerId: marta, dueDate: inDays(-3), done: true, meetingId: lastL10 },
+    { title: 'Chase the Nordwind sandbox credentials', ownerId: piotr, dueDate: inDays(-2), done: true, meetingId: lastL10 },
+    { title: 'Publish the onboarding runbook internally', ownerId: anna, dueDate: inDays(-5), done: true },
+    { title: 'Confirm the Bergström renewal date', ownerId: luca, dueDate: inDays(-6), done: true },
+    // One overdue and open, so completion sits below the 90% bar.
+    { title: 'Write the Q3 board update', ownerId: florian, dueDate: inDays(-1), done: false, meetingId: lastL10 },
+    { title: 'Get the Ledgerline demo environment stable', ownerId: jakub, dueDate: inDays(3), done: false, meetingId: lastL10 },
+    { title: 'Draft the CSM job spec', ownerId: marta, dueDate: inDays(4), done: false, meetingId: lastL10 },
+    { title: 'Review the support ticket backlog tags', ownerId: luca, dueDate: inDays(5), done: false },
+    { title: 'Move the status page to the new domain', ownerId: piotr, dueDate: inDays(6), done: false },
+  ])
+
+  await db.insert(s.eosIssues).values([
+    { title: 'Nordwind invoice 96 days overdue — escalate or write off?', status: 'Open', ownerId: florian, createdAt: daysAgo(34) },
+    { title: 'CSM hiring pipeline is empty', status: 'Open', ownerId: marta, createdAt: daysAgo(21) },
+    { title: 'Café Milano usage dropped 40% month on month', status: 'Open', ownerId: luca, createdAt: daysAgo(12) },
+    { title: 'Deploy pipeline flakes on Fridays', status: 'Open', ownerId: piotr, createdAt: daysAgo(8) },
+    { title: 'Scale-tier pricing page still says 2025', status: 'Open', createdAt: daysAgo(2) },
+    { title: 'Two people double-booked on Nordwind UAT week', status: 'Solved', ownerId: anna, solvedInMeetingId: lastL10, createdAt: daysAgo(15) },
+    { title: 'Which CRM fields are mandatory for new deals?', status: 'Solved', ownerId: marta, solvedInMeetingId: lastL10, createdAt: daysAgo(20) },
+    { title: 'Should we sponsor the Kraków meetup?', status: 'Dropped', createdAt: daysAgo(28) },
   ])
 
   console.log(`\nDone. Sign in as ${FOUNDER_EMAIL}.`)

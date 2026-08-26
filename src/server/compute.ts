@@ -535,3 +535,105 @@ export function timeIsInvoiced(link: { invoiceId: string | null; invoiceStatus?:
   if (!link.invoiceId) return false
   return link.invoiceStatus !== 'Void'
 }
+
+/* ==========================================================================
+ * TRACTION — the operating cadence
+ * ========================================================================== */
+
+/** '2026-08-26' → '2026-Q3'. */
+export function quarterOf(isoDate: string): string {
+  const [year, month] = isoDate.split('-').map(Number)
+  return `${year}-Q${Math.ceil(month / 3)}`
+}
+
+/** '2026-Q3' → '2026-09-30'. Throws on a malformed quarter — callers validate first. */
+export function quarterEndDate(quarter: string): string {
+  const match = quarter.match(/^(\d{4})-Q([1-4])$/)
+  if (!match) throw new Error(`Not a quarter: ${quarter}`)
+  const year = Number(match[1])
+  const endMonth = Number(match[2]) * 3
+  // Day 0 of the following month is the last day of this one.
+  const lastDay = new Date(Date.UTC(year, endMonth, 0)).getUTCDate()
+  return `${year}-${String(endMonth).padStart(2, '0')}-${lastDay}`
+}
+
+/** Any ISO date → that ISO week's Monday. UTC arithmetic, no local-time traps. */
+export function mondayOf(isoDate: string): string {
+  const [year, month, day] = isoDate.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  // getUTCDay: Sunday 0 … Saturday 6. Distance back to Monday, with Sunday as 6.
+  const back = (date.getUTCDay() + 6) % 7
+  date.setUTCDate(date.getUTCDate() - back)
+  return date.toISOString().slice(0, 10)
+}
+
+/** The `weeks` Mondays ending at (and including) the anchor's week, ascending. */
+export function scorecardWeeks(anchor: string, weeks = 13): string[] {
+  const monday = mondayOf(anchor)
+  const [year, month, day] = monday.split('-').map(Number)
+  const end = Date.UTC(year, month - 1, day)
+  const out: string[] = []
+  for (let i = weeks - 1; i >= 0; i -= 1) {
+    out.push(new Date(end - i * 7 * 86_400_000).toISOString().slice(0, 10))
+  }
+  return out
+}
+
+/** Is this week's number on the right side of the goal? */
+export function measurableOnTrack(
+  value: number,
+  goalValue: number,
+  direction: 'AtLeast' | 'AtMost',
+): boolean {
+  return direction === 'AtLeast' ? value >= goalValue : value <= goalValue
+}
+
+/**
+ * Share of recorded weeks on goal, in basis points. Null when nothing was
+ * recorded — no data is not the same thing as 0%.
+ */
+export function scorecardHitRateBps(
+  values: number[],
+  goalValue: number,
+  direction: 'AtLeast' | 'AtMost',
+): number | null {
+  if (values.length === 0) return null
+  const hits = values.filter((v) => measurableOnTrack(v, goalValue, direction)).length
+  return Math.round((hits / values.length) * 10_000)
+}
+
+/** The book's bar for to-do completion: 90%. */
+export const TODO_COMPLETION_BAR_BPS = 9_000
+
+/**
+ * Done ÷ due, in basis points. Only to-dos whose due date has arrived count as
+ * due — punishing someone for not having done Friday's to-do on Wednesday would
+ * make the number lie. Null when nothing was due yet.
+ */
+export function todoCompletionBps(
+  todos: { done: boolean; dueDate: string }[],
+  today = new Date().toISOString().slice(0, 10),
+): number | null {
+  const due = todos.filter((t) => t.dueDate <= today)
+  if (due.length === 0) return null
+  const done = due.filter((t) => t.done).length
+  return Math.round((done / due.length) * 10_000)
+}
+
+/**
+ * Done ÷ everything except Dropped, in basis points. A dropped rock was
+ * descoped, not failed — the Cancelled-milestone logic. Null with no rocks.
+ */
+export function rockCompletionBps(rocks: { status: string }[]): number | null {
+  const counted = rocks.filter((r) => r.status !== 'Dropped')
+  if (counted.length === 0) return null
+  const done = counted.filter((r) => r.status === 'Done').length
+  return Math.round((done / counted.length) * 10_000)
+}
+
+/** Mean of the ratings that exist, to one decimal. Null when none do. */
+export function averageRating(ratings: (number | null)[]): number | null {
+  const real = ratings.filter((r): r is number => typeof r === 'number')
+  if (real.length === 0) return null
+  return Math.round((real.reduce((a, b) => a + b, 0) / real.length) * 10) / 10
+}

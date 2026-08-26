@@ -57,6 +57,13 @@
       "when": 1785096337042,
       "tag": "0007_drop_time_entry_invoiced_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787760102525,
+      "tag": "0008_traction_eos",
+      "breakpoints": true
     }
   ]
 }

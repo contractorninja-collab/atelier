@@ -50,6 +50,13 @@ const SALES_TABLES: TableId[] = [
  */
 const ADMIN_ONLY_TABLES: TableId[] = ['audit']
 
+/**
+ * The EOS cadence artifacts. Every active member runs the meeting, owns rocks,
+ * records numbers and ticks to-dos — gating any of it on role would make the
+ * weekly ritual somebody's bottleneck.
+ */
+const EOS_TABLES: TableId[] = ['meetings', 'rocks', 'measurables', 'scorecardEntries', 'todos', 'issues']
+
 export function isAdmin(role: Role): boolean {
   return role !== null && ADMIN_ROLES.includes(role)
 }
@@ -78,6 +85,7 @@ export function canWrite(role: Role, table: TableId): boolean {
     return DELIVERY_ROLES.includes(role)
   }
   if (SALES_TABLES.includes(table)) return SALES_ROLES.includes(role) || DELIVERY_ROLES.includes(role)
+  if (EOS_TABLES.includes(table)) return true
   return false
 }
 

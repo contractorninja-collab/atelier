@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { Icon } from './Icon'
 import { GenericForm } from './GenericForm'
 import {
-  createDeal, createInvoice, createOrganization, createPayment, createTarget, createTeamMember,
+  createDeal, createInvoice, createMeasurable, createOrganization, createPayment, createTarget, createTeamMember,
   openInvoices, suggestInvoiceNumber,
 } from '@/server/actions'
 import { CREATE_SPEC, DEAL_STAGE_OPTIONS, TABLES, TARGET_METRIC_UNIT } from '@/lib/tables'
@@ -18,7 +18,7 @@ type Lookups = Record<string, { id: string; label: string }[]>
  * a field list: a deal opens in a specific stage, a target's unit depends on its
  * metric, an invoice numbers itself, a payment defaults to what is outstanding.
  */
-const BESPOKE: TableId[] = ['deals', 'organizations', 'targets', 'team', 'invoices', 'payments']
+const BESPOKE: TableId[] = ['deals', 'organizations', 'targets', 'team', 'invoices', 'payments', 'measurables']
 
 /**
  * Everything creatable — the bespoke forms plus every table declaring a
@@ -35,6 +35,7 @@ const TITLES: Partial<Record<TableId, string>> = {
   deals: 'deal',
   organizations: 'company',
   targets: 'target',
+  measurables: 'measurable',
   team: 'member',
   invoices: 'invoice',
   payments: 'payment',
@@ -165,6 +166,7 @@ export function NewRecordDialog({
         {table === 'organizations' ? <CompanyForm lookups={lookups} onDone={onDone} /> : null}
         {table === 'targets' ? <TargetForm lookups={lookups} onDone={onDone} /> : null}
         {table === 'team' ? <MemberForm onDone={onDone} /> : null}
+        {table === 'measurables' ? <MeasurableForm lookups={lookups} onDone={onDone} /> : null}
         {table === 'invoices' ? (
           <InvoiceForm
             lookups={lookups} onDone={onDone}
@@ -386,6 +388,97 @@ function TargetForm({ lookups, onDone }: { lookups: Lookups; onDone: (m: string)
 
       <Error error={error} />
       <Submit pending={pending} label="Create target" />
+    </form>
+  )
+}
+
+/* --------------------------------------------------------------- measurable */
+
+/**
+ * Bespoke for the same reason the target form is: the goal's unit depends on
+ * the unit chosen beside it, which the generic field list cannot express.
+ */
+function MeasurableForm({ lookups, onDone }: { lookups: Lookups; onDone: (m: string) => void }) {
+  const { pending, error, submit } = useCreate(onDone)
+  const [name, setName] = useState('')
+  const [unit, setUnit] = useState('Count')
+  const [direction, setDirection] = useState('AtLeast')
+  const [goal, setGoal] = useState('')
+  const [ownerId, setOwnerId] = useState('')
+
+  return (
+    <form
+      className="login"
+      style={formStyle}
+      onSubmit={(e) =>
+        submit(
+          e,
+          () => createMeasurable({
+            name, unit, direction,
+            ownerId: ownerId || null,
+            goal: Number(goal),
+          }),
+          (r) => (r.ok && r.detail) || 'Measurable created',
+        )
+      }
+    >
+      <label htmlFor="nm-name">Measurable</label>
+      <input
+        id="nm-name" type="text" required autoFocus value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Weekly cash collected" style={{ width: '100%' }}
+      />
+      <p style={hintStyle}>The number somebody reads out every week.</p>
+
+      <label htmlFor="nm-unit" style={{ marginTop: 14 }}>Unit</label>
+      <select id="nm-unit" value={unit} onChange={(e) => setUnit(e.target.value)} style={selectStyle}>
+        {optionsFor('measurables', 'unit').map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+
+      <label htmlFor="nm-goal" style={{ marginTop: 14 }}>
+        Goal {unit === 'Money' ? '(€)' : unit === 'Percent' ? '(%)' : '(count)'}
+      </label>
+      <input
+        id="nm-goal" type="number" required min={0}
+        max={unit === 'Percent' ? 100 : undefined}
+        step={unit === 'Count' ? 1 : 'any'}
+        value={goal} onChange={(e) => setGoal(e.target.value)}
+        placeholder={unit === 'Money' ? '12000' : unit === 'Percent' ? '75' : '3'}
+        style={{ width: '100%' }}
+      />
+      <p style={hintStyle}>
+        {unit === 'Money'
+          ? 'In euros. Stored as cents.'
+          : unit === 'Percent'
+            ? 'A percentage. Stored as basis points.'
+            : 'A plain count.'}
+      </p>
+
+      <label htmlFor="nm-direction" style={{ marginTop: 14 }}>Direction</label>
+      <select id="nm-direction" value={direction} onChange={(e) => setDirection(e.target.value)} style={selectStyle}>
+        {optionsFor('measurables', 'direction').map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+      <p style={hintStyle}>
+        {direction === 'AtLeast'
+          ? 'On track when the week is at or above goal.'
+          : 'On track when the week is at or below goal.'}
+      </p>
+
+      <label htmlFor="nm-owner" style={{ marginTop: 14 }}>Owner</label>
+      <select id="nm-owner" value={ownerId} onChange={(e) => setOwnerId(e.target.value)} style={selectStyle}>
+        <option value="">Nobody yet</option>
+        {(lookups.team ?? []).map((o) => (
+          <option key={o.id} value={o.id}>{o.label}</option>
+        ))}
+      </select>
+      <p style={hintStyle}>Who answers for this number in the meeting.</p>
+
+      <Error error={error} />
+      <Submit pending={pending} label="Create measurable" />
     </form>
   )
 }

@@ -1,20 +1,20 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { and, eq, inArray, isNull } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
 import { z } from 'zod'
 import { db } from '@/db'
 import * as t from '@/db/schema'
 import { auth } from '@/auth'
 import {
-  CREATE_SPEC, TARGET_METRIC_UNIT, TARGET_PERIOD_PATTERN, getTable,
+  CREATE_SPEC, ROCK_QUARTER_PATTERN, TARGET_METRIC_UNIT, TARGET_PERIOD_PATTERN, getTable,
 } from '@/lib/tables'
 import { canDelete, canWrite, refusal } from '@/lib/permissions'
 // Not defined here because 'use server' allows only async exports, which would
 // put this list beyond the reach of any test. See writable.ts.
 import { WRITABLE } from '@/lib/writable'
 import { daysBetween, normaliseDomain, toISODate } from '@/lib/format'
-import { invoiceState, nextInvoiceNumber, nextRenewalDate } from './compute'
+import { invoiceState, mondayOf, nextInvoiceNumber, nextRenewalDate, quarterEndDate } from './compute'
 // Not defined here on purpose: 'use server' would publish it as an endpoint, and
 // it has to be callable from a test with no session. See handoff.ts.
 import { spawnProjectForDeal } from './handoff'
@@ -175,6 +175,12 @@ const TABLE_TO_DRIZZLE = {
   audit: t.auditLog,
   /** A client *is* an organization; edits from the Clients grid go to that row. */
   clients: t.organizations,
+  meetings: t.meetings,
+  rocks: t.rocks,
+  measurables: t.measurables,
+  scorecardEntries: t.scorecardEntries,
+  todos: t.eosTodos,
+  issues: t.eosIssues,
 } as const
 
 
@@ -742,6 +748,71 @@ export type NewTargetInput = z.infer<typeof newTargetSchema>
  * blocked two identical *company* targets, whose member is NULL. Coverage would
  * then double-count against the quarter and read as healthy when it is not.
  */
+const newMeasurableSchema = z.object({
+  name: z.string().trim().min(1),
+  unit: z.string(),
+  direction: z.string(),
+  ownerId: z.string().nullable().optional(),
+  /** Entered in natural units — euros, percent, or a plain count. */
+  goal: z.number().finite(),
+})
+
+export type NewMeasurableInput = z.infer<typeof newMeasurableSchema>
+
+/**
+ * Bespoke for the same reason targets are: the goal's unit depends on the unit
+ * field beside it, which a static field list cannot express. The conversion is
+ * createTarget's exact arithmetic, so €12,000 and 75% mean what was typed.
+ */
+export async function createMeasurable(input: NewMeasurableInput): Promise<ActionResult> {
+  try {
+    const member = await requirePermission('measurables', 'edit')
+    const data = newMeasurableSchema.parse(input)
+
+    const config = getTable('measurables')
+    for (const fieldId of ['unit', 'direction'] as const) {
+      const options = config?.fields.find((f) => f.id === fieldId)?.options ?? []
+      if (!options.some((o) => o.value === data[fieldId])) {
+        return { ok: false, error: `${data[fieldId]} is not a valid ${fieldId}` }
+      }
+    }
+
+    if (data.goal < 0) return { ok: false, error: 'A goal cannot be negative' }
+    if (data.unit === 'Percent' && data.goal > 100) {
+      return { ok: false, error: 'A percentage goal cannot exceed 100' }
+    }
+
+    const goalValue =
+      data.unit === 'Money' || data.unit === 'Percent'
+        ? Math.round(data.goal * 100)
+        : Math.round(data.goal)
+
+    // Checked ahead of the unique constraint for the friendlier sentence.
+    const existing = await db.query.measurables.findFirst({ where: eq(t.measurables.name, data.name) })
+    if (existing) return { ok: false, error: `A measurable called ${data.name} already exists` }
+
+    // New rows join the end of the scorecard rather than colliding at zero.
+    const last = await db.query.measurables.findMany({
+      columns: { sequence: true }, orderBy: [desc(t.measurables.sequence)], limit: 1,
+    })
+
+    const [created] = await db.insert(t.measurables).values({
+      name: data.name,
+      unit: data.unit as never,
+      direction: data.direction as never,
+      ownerId: data.ownerId ?? null,
+      goalValue,
+      sequence: (last[0]?.sequence ?? 0) + 1,
+    }).returning()
+
+    await recordAudit(member, 'create', 'measurables', [created as Record<string, unknown>])
+    revalidatePath('/', 'layout')
+    return { ok: true, detail: `${data.name} added to the scorecard` }
+  } catch (error) {
+    return failure('createMeasurable', error, 'Could not create the measurable', 'measurables')
+  }
+}
+
 export async function createTarget(input: NewTargetInput): Promise<ActionResult> {
   try {
     await requirePermission('targets', 'edit')
@@ -989,6 +1060,65 @@ async function applyCreateRules(
       // a project that has never moved reads as zero slip rather than unknown.
       const target = str('targetLaunch')
       return { ok: true, row: target && !row.baselineLaunch ? { ...row, baselineLaunch: target } : row }
+    }
+
+    case 'meetings': {
+      // The planned length follows the type; nobody should have to know that an
+      // L10 is ninety minutes to schedule one.
+      if (num('durationMinutes')) return { ok: true, row }
+      const byType: Record<string, number> = { L10: 90, Quarterly: 480, Annual: 960 }
+      return { ok: true, row: { ...row, durationMinutes: byType[str('type') ?? 'L10'] ?? 90 } }
+    }
+
+    case 'rocks': {
+      const quarter = str('quarter') ?? ''
+      if (!ROCK_QUARTER_PATTERN.test(quarter)) {
+        return { ok: false, error: 'Quarter must look like 2026-Q3' }
+      }
+      // Due at quarter end unless somebody chose otherwise — a rock without a
+      // date is a wish.
+      return { ok: true, row: row.dueDate ? row : { ...row, dueDate: quarterEndDate(quarter) } }
+    }
+
+    case 'scorecardEntries': {
+      const measurableId = str('measurableId')
+      if (!measurableId) return { ok: false, error: 'Measurable is required' }
+      const measurable = await db.query.measurables.findFirst({
+        where: eq(t.measurables.id, measurableId),
+        columns: { name: true, unit: true },
+      })
+      if (!measurable) return { ok: false, error: 'Unknown measurable' }
+
+      // "Always a Monday" is enforced, not documented: whatever day was picked,
+      // the entry lands on that week's Monday.
+      const week = mondayOf(str('weekStarting') ?? '')
+
+      // Entered in natural units, stored in raw ones — createTarget's exact
+      // conversion, so €12,000 and 75% mean what the person typed.
+      const raw = num('value') ?? 0
+      const value =
+        measurable.unit === 'Money' ? Math.round(raw * 100)
+        : measurable.unit === 'Percent' ? Math.round(raw * 100)
+        : Math.round(raw)
+
+      // Checked ahead of the unique constraint for the friendlier sentence; the
+      // constraint still backstops a race.
+      const existing = await db.query.scorecardEntries.findFirst({
+        where: and(eq(t.scorecardEntries.measurableId, measurableId), eq(t.scorecardEntries.weekStarting, week)),
+        columns: { id: true },
+      })
+      if (existing) {
+        return { ok: false, error: `${measurable.name} already has a value for the week of ${week} — edit that entry instead.` }
+      }
+
+      return { ok: true, row: { ...row, weekStarting: week, value }, note: `week of ${week}` }
+    }
+
+    case 'todos': {
+      // Due in seven days — that is the cadence. Anything longer is a rock or a task.
+      if (row.dueDate) return { ok: true, row }
+      const due = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10)
+      return { ok: true, row: { ...row, dueDate: due } }
     }
 
     default:
@@ -1391,5 +1521,112 @@ export async function updateMyProfile(input: ProfileInput): Promise<ActionResult
     return { ok: true, detail: 'Profile saved' }
   } catch (error) {
     return failure('updateMyProfile', error, 'Could not save profile')
+  }
+}
+
+/* ---------------------------------------------------------------- traction */
+
+const startMeetingSchema = z.object({ id: z.string().min(1) })
+
+/**
+ * Scheduled → InProgress, stamping startedAt. Idempotent on purpose: two
+ * people clicking Start in the same second must not produce an error in the
+ * room — the second click just finds the meeting already running.
+ */
+export async function startMeeting(input: z.infer<typeof startMeetingSchema>): Promise<ActionResult> {
+  try {
+    await requirePermission('meetings', 'edit')
+    const { id } = startMeetingSchema.parse(input)
+
+    const meeting = await db.query.meetings.findFirst({ where: eq(t.meetings.id, id) })
+    if (!meeting) return { ok: false, error: 'Unknown meeting' }
+    if (meeting.status === 'Concluded') return { ok: false, error: 'This meeting has already been concluded' }
+    if (meeting.status === 'InProgress') return { ok: true, detail: 'Already running' }
+
+    await db.update(t.meetings)
+      .set({ status: 'InProgress', startedAt: new Date(), updatedAt: new Date() })
+      .where(eq(t.meetings.id, id))
+
+    revalidatePath('/', 'layout')
+    return { ok: true, detail: 'Meeting started' }
+  } catch (error) {
+    return failure('startMeeting', error, 'Could not start the meeting')
+  }
+}
+
+const concludeMeetingSchema = z.object({
+  id: z.string().min(1),
+  rating: z.number().int().min(1).max(10),
+  cascadingMessages: z.string().trim().optional(),
+  headlines: z.string().trim().optional(),
+})
+
+/** Stamps the conclusion: status, concludedAt, the rating and the texts. */
+export async function concludeMeeting(input: z.infer<typeof concludeMeetingSchema>): Promise<ActionResult> {
+  try {
+    await requirePermission('meetings', 'edit')
+    const data = concludeMeetingSchema.parse(input)
+
+    const meeting = await db.query.meetings.findFirst({ where: eq(t.meetings.id, data.id) })
+    if (!meeting) return { ok: false, error: 'Unknown meeting' }
+    // Refused rather than overwritten: a second conclude would silently
+    // replace the rating the room agreed on.
+    if (meeting.status === 'Concluded') return { ok: false, error: 'This meeting has already been concluded' }
+
+    const openTodos = await db.query.eosTodos.findMany({
+      where: eq(t.eosTodos.done, false), columns: { id: true },
+    })
+
+    await db.update(t.meetings)
+      .set({
+        status: 'Concluded',
+        concludedAt: new Date(),
+        rating: data.rating,
+        cascadingMessages: data.cascadingMessages || meeting.cascadingMessages,
+        headlines: data.headlines || meeting.headlines,
+        updatedAt: new Date(),
+      })
+      .where(eq(t.meetings.id, data.id))
+
+    revalidatePath('/', 'layout')
+    return {
+      ok: true,
+      detail: `Rated ${data.rating}/10 — ${openTodos.length} to-do${openTodos.length === 1 ? '' : 's'} open`,
+    }
+  } catch (error) {
+    return failure('concludeMeeting', error, 'Could not conclude the meeting')
+  }
+}
+
+const resolveIssueSchema = z.object({
+  issueId: z.string().min(1),
+  outcome: z.enum(['Solved', 'Dropped']),
+  meetingId: z.string().nullable().optional(),
+})
+
+/**
+ * How an issue leaves the list. Only a solve remembers the meeting — a dropped
+ * issue was noise, and noise does not deserve a foreign key.
+ */
+export async function resolveIssue(input: z.infer<typeof resolveIssueSchema>): Promise<ActionResult> {
+  try {
+    await requirePermission('issues', 'edit')
+    const data = resolveIssueSchema.parse(input)
+
+    const issue = await db.query.eosIssues.findFirst({ where: eq(t.eosIssues.id, data.issueId) })
+    if (!issue) return { ok: false, error: 'Unknown issue' }
+
+    await db.update(t.eosIssues)
+      .set({
+        status: data.outcome,
+        solvedInMeetingId: data.outcome === 'Solved' ? (data.meetingId ?? null) : null,
+        updatedAt: new Date(),
+      })
+      .where(eq(t.eosIssues.id, data.issueId))
+
+    revalidatePath('/', 'layout')
+    return { ok: true, detail: data.outcome === 'Solved' ? 'Solved — now make it a to-do' : 'Dropped' }
+  } catch (error) {
+    return failure('resolveIssue', error, 'Could not update the issue')
   }
 }

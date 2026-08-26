@@ -132,6 +132,22 @@ export const invoiceStatus = pgEnum('invoice_status', ['Draft', 'Sent', 'Void'])
 export const paymentMethod = pgEnum('payment_method', ['Transfer', 'Card', 'DirectDebit', 'Cash', 'Other'])
 export const subscriptionStatus = pgEnum('subscription_status', ['Active', 'Paused', 'Cancelled'])
 
+/* ---------------------------- Traction enums ----------------------------- */
+
+export const meetingType = pgEnum('meeting_type', ['L10', 'Quarterly', 'Annual'])
+/** No Cancelled: deleting the row covers it, and the audit log records the delete. */
+export const meetingStatus = pgEnum('meeting_status', ['Scheduled', 'InProgress', 'Concluded'])
+/**
+ * Company rocks and individual rocks — the book has no third kind. targetScope
+ * is not reused because its Team member would be a lie this schema tells.
+ */
+export const rockScope = pgEnum('rock_scope', ['Company', 'Individual'])
+export const rockStatus = pgEnum('rock_status', ['OnTrack', 'OffTrack', 'Done', 'Dropped'])
+export const measurableUnit = pgEnum('measurable_unit', ['Money', 'Percent', 'Count'])
+/** Which side of the goal is good: revenue is AtLeast, overdue debt is AtMost. */
+export const measurableDirection = pgEnum('measurable_direction', ['AtLeast', 'AtMost'])
+export const eosIssueStatus = pgEnum('eos_issue_status', ['Open', 'Solved', 'Dropped'])
+
 /* ==========================================================================
  * AUTH (shapes required by @auth/drizzle-adapter — do not rename)
  * ========================================================================== */
@@ -921,6 +937,154 @@ export const payments = pgTable('payment', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('payment_invoice_idx').on(t.invoiceId)])
 
+/* ==========================================================================
+ * GROUP J — TRACTION
+ *
+ * The EOS operating cadence: the weekly L10, quarterly rocks, the scorecard,
+ * to-dos and the issues list. Everything else in this schema records what the
+ * business did; this group records how it runs itself — and its tables are
+ * deliberately light, because a cadence tool people find heavy is a cadence
+ * tool people stop using by week three.
+ * ========================================================================== */
+
+export const meetings = pgTable('meeting', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  seq: serial('seq').notNull(),
+  type: meetingType('type').notNull().default('L10'),
+  heldOn: date('held_on').notNull(),
+  /** Moved only by startMeeting/concludeMeeting, which stamp the fields below. */
+  status: meetingStatus('status').notNull().default('Scheduled'),
+  /** Who runs it — the facilitator, not an attendee list. */
+  ownerId: text('owner_id').references(() => teamMembers.id, { onDelete: 'set null' }),
+  durationMinutes: integer('duration_minutes'),
+  startedAt: timestamp('started_at'),
+  concludedAt: timestamp('concluded_at'),
+  /**
+   * 1–10, the number the room agrees on at conclude. One per meeting, not per
+   * attendee: there is no attendance concept anywhere in this schema, and a
+   * join table to store eight numbers that get averaged once is not v1.
+   */
+  rating: integer('rating'),
+  headlines: text('headlines'),
+  cascadingMessages: text('cascading_messages'),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [
+  index('meeting_held_idx').on(t.heldOn),
+  index('meeting_status_idx').on(t.status),
+])
+
+export const rocks = pgTable('rock', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  seq: serial('seq').notNull(),
+  title: text('title').notNull(),
+  /** "2026-Q3". Quarterly by definition — validated against ROCK_QUARTER_PATTERN on create. */
+  quarter: text('quarter').notNull(),
+  scope: rockScope('scope').notNull().default('Individual'),
+  status: rockStatus('status').notNull().default('OnTrack'),
+  /** A rock always has exactly one owner — the book is emphatic about this. */
+  ownerId: text('owner_id').notNull().references(() => teamMembers.id, { onDelete: 'cascade' }),
+  /** Defaults to the end of the quarter on create; movable when a rock is re-scoped. */
+  dueDate: date('due_date'),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [
+  index('rock_quarter_idx').on(t.quarter),
+  index('rock_owner_idx').on(t.ownerId),
+])
+
+/**
+ * A scorecard row definition. The weekly numbers live in scorecard_entry —
+ * definitions and facts are different grains, exactly like targets and the
+ * things they measure.
+ */
+export const measurables = pgTable('measurable', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  seq: serial('seq').notNull(),
+  name: text('name').notNull().unique(),
+  ownerId: text('owner_id').references(() => teamMembers.id, { onDelete: 'set null' }),
+  unit: measurableUnit('unit').notNull().default('Count'),
+  /** Cents for Money, basis points for Percent, the plain number for Count —
+   *  the same tri-unit convention as target.value. */
+  goalValue: integer('goal_value').notNull().default(0),
+  direction: measurableDirection('direction').notNull().default('AtLeast'),
+  active: boolean('active').notNull().default(true),
+  /** Scorecard display order. */
+  sequence: integer('sequence').notNull().default(0),
+  /** Where this number comes from, so it survives the person who set it up. */
+  notes: text('notes'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+})
+
+export const scorecardEntries = pgTable('scorecard_entry', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  measurableId: text('measurable_id').notNull().references(() => measurables.id, { onDelete: 'cascade' }),
+  /** Always a Monday — snapped on create, the allocations convention. */
+  weekStarting: date('week_starting').notNull(),
+  /** Same unit as the measurable: cents, bps, or a count. */
+  value: integer('value').notNull(),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [
+  // The name must contain "week_starting": duplicateMessage resolves the
+  // colliding field by finding its snake_case id inside the constraint name,
+  // and "_week_key" would degrade a duplicate week to the generic error.
+  uniqueIndex('scorecard_entry_week_starting_key').on(t.measurableId, t.weekStarting),
+  index('scorecard_entry_measurable_idx').on(t.measurableId),
+  index('scorecard_entry_week_idx').on(t.weekStarting),
+])
+
+/**
+ * EOS to-dos — seven-day commitments made in a meeting. Not tasks: a task is
+ * delivery work with estimates and sprints, a to-do is "I will call them by
+ * Friday". Prefixed eos_ in SQL so the two can never be confused at that layer.
+ *
+ * No doneAt: stamping it would mean routing `done` through an action, which
+ * kills the one-click check-off — for a table whose entire point is lightness.
+ * The book's bar is "was it done by the next meeting", which done + dueDate
+ * answers.
+ */
+export const eosTodos = pgTable('eos_todo', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  seq: serial('seq').notNull(),
+  title: text('title').notNull(),
+  ownerId: text('owner_id').notNull().references(() => teamMembers.id, { onDelete: 'cascade' }),
+  /** Defaults to +7 days on create — that is the cadence. */
+  dueDate: date('due_date').notNull(),
+  /** The meeting it was raised in, when it was raised in one. */
+  meetingId: text('meeting_id').references(() => meetings.id, { onDelete: 'set null' }),
+  done: boolean('done').notNull().default(false),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [
+  index('eos_todo_owner_idx').on(t.ownerId),
+  index('eos_todo_due_idx').on(t.dueDate),
+])
+
+/**
+ * The issues list. No priority column — the book's "pick the top three"
+ * happens live in the room, and a stored rank rots weekly. No raisedById —
+ * the audit log already records who created the row. Only the solve gets a
+ * foreign key, because IDS is where issues die and that is worth remembering.
+ */
+export const eosIssues = pgTable('eos_issue', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  seq: serial('seq').notNull(),
+  title: text('title').notNull(),
+  status: eosIssueStatus('status').notNull().default('Open'),
+  /** Who owns solving it — often nobody until IDS assigns it. */
+  ownerId: text('owner_id').references(() => teamMembers.id, { onDelete: 'set null' }),
+  /** Null on a solved issue means "solved outside a meeting", which is honest. */
+  solvedInMeetingId: text('solved_in_meeting_id').references(() => meetings.id, { onDelete: 'set null' }),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [index('eos_issue_status_idx').on(t.status)])
+
 /**
  * What was changed, by whom, and what it looked like before.
  *
@@ -987,6 +1151,35 @@ export const riskRelations = relations(risks, ({ one }) => ({
   owner: one(teamMembers, { fields: [risks.ownerId], references: [teamMembers.id] }),
 }))
 
+export const meetingRelations = relations(meetings, ({ one, many }) => ({
+  owner: one(teamMembers, { fields: [meetings.ownerId], references: [teamMembers.id] }),
+  todos: many(eosTodos),
+  issuesSolved: many(eosIssues),
+}))
+
+export const rockRelations = relations(rocks, ({ one }) => ({
+  owner: one(teamMembers, { fields: [rocks.ownerId], references: [teamMembers.id] }),
+}))
+
+export const measurableRelations = relations(measurables, ({ one, many }) => ({
+  owner: one(teamMembers, { fields: [measurables.ownerId], references: [teamMembers.id] }),
+  entries: many(scorecardEntries),
+}))
+
+export const scorecardEntryRelations = relations(scorecardEntries, ({ one }) => ({
+  measurable: one(measurables, { fields: [scorecardEntries.measurableId], references: [measurables.id] }),
+}))
+
+export const eosTodoRelations = relations(eosTodos, ({ one }) => ({
+  owner: one(teamMembers, { fields: [eosTodos.ownerId], references: [teamMembers.id] }),
+  meeting: one(meetings, { fields: [eosTodos.meetingId], references: [meetings.id] }),
+}))
+
+export const eosIssueRelations = relations(eosIssues, ({ one }) => ({
+  owner: one(teamMembers, { fields: [eosIssues.ownerId], references: [teamMembers.id] }),
+  solvedInMeeting: one(meetings, { fields: [eosIssues.solvedInMeetingId], references: [meetings.id] }),
+}))
+
 export type Organization = typeof organizations.$inferSelect
 export type Contact = typeof contacts.$inferSelect
 export type Deal = typeof deals.$inferSelect
@@ -1003,3 +1196,9 @@ export type TimeEntry = typeof timeEntries.$inferSelect
 export type Subscription = typeof subscriptions.$inferSelect
 export type Invoice = typeof invoices.$inferSelect
 export type Payment = typeof payments.$inferSelect
+export type Meeting = typeof meetings.$inferSelect
+export type Rock = typeof rocks.$inferSelect
+export type Measurable = typeof measurables.$inferSelect
+export type ScorecardEntry = typeof scorecardEntries.$inferSelect
+export type EosTodo = typeof eosTodos.$inferSelect
+export type EosIssue = typeof eosIssues.$inferSelect

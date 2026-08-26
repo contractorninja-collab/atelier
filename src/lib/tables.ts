@@ -515,6 +515,9 @@ export const SPACES = [
   { id: 'capacity', name: 'Capacity', color: '#3b93e0', abbr: 'C', icon: 'clock', tables: ['timeEntries', 'allocations', 'absences'] },
   { id: 'catalogue', name: 'Catalogue', color: '#e0a020', abbr: 'K', icon: 'grid', tables: ['products', 'sources'] },
   { id: 'people', name: 'People & Targets', color: '#12a5a5', abbr: 'T', icon: 'users', tables: ['team', 'targets', 'audit'] },
+  // scorecardEntries is deliberately absent: corrections happen via its URL or
+  // a measurable's Related panel, and the sidebar stays the weekly ritual.
+  { id: 'traction', name: 'Traction', color: '#c2415f', abbr: 'E', icon: 'compass', tables: ['meetings', 'rocks', 'measurables', 'todos', 'issues'] },
 ] as const
 
 /* ----------------------------------------------------------------- tables */
@@ -1194,7 +1197,229 @@ const AUDIT: Partial<Record<TableId, TableConfig>> = {
   },
 }
 
-export const TABLES = { ...PHASE_1, ...PHASE_2, ...REVENUE, ...AUDIT } as Record<TableId, TableConfig>
+/* ------------------------------------------------------------- traction */
+
+const MEETING_TYPE = opts(
+  ['L10', 'Level 10', C.sky],
+  ['Quarterly', 'Quarterly', C.violet],
+  ['Annual', 'Annual', C.amber],
+)
+
+export const MEETING_STATUS = opts(
+  ['Scheduled', 'Scheduled', C.gray],
+  ['InProgress', 'In progress', C.amber],
+  ['Concluded', 'Concluded', C.green],
+)
+
+const ROCK_SCOPE = opts(
+  ['Company', 'Company', C.violet],
+  ['Individual', 'Individual', C.sky],
+)
+
+export const ROCK_STATUS = opts(
+  ['OnTrack', 'On track', C.green],
+  ['OffTrack', 'Off track', C.rose],
+  ['Done', 'Done', C.teal],
+  ['Dropped', 'Dropped', C.gray],
+)
+
+export const MEASURABLE_UNIT = opts(
+  ['Money', 'Money (€)', C.green],
+  ['Percent', 'Percent', C.sky],
+  ['Count', 'Count', C.gray],
+)
+
+export const MEASURABLE_DIRECTION = opts(
+  ['AtLeast', 'At least', C.green],
+  ['AtMost', 'At most', C.amber],
+)
+
+export const EOS_ISSUE_STATUS = opts(
+  ['Open', 'Open', C.amber],
+  ['Solved', 'Solved', C.green],
+  ['Dropped', 'Dropped', C.gray],
+)
+
+/** Rocks are quarterly by definition — stricter than TARGET_PERIOD_PATTERN (no months). */
+export const ROCK_QUARTER_PATTERN = /^\d{4}-Q[1-4]$/
+
+/**
+ * The agenda each meeting type runs, in order. Segment ids key the run page's
+ * interactive panels — an id it does not recognise renders the hint as an
+ * instruction card, which is how the Quarterly and Annual agendas mostly work.
+ */
+export const MEETING_AGENDA: Record<string, { id: string; name: string; minutes: number; hint: string }[]> = {
+  L10: [
+    { id: 'segue', name: 'Segue', minutes: 5, hint: 'Good news, personal and business. 90 seconds each.' },
+    { id: 'scorecard', name: 'Scorecard review', minutes: 5, hint: 'On track or off track. Off-track drops to the issues list — no discussion here.' },
+    { id: 'rocks', name: 'Rock review', minutes: 5, hint: 'On track or off track, nothing else. Off-track drops down.' },
+    { id: 'headlines', name: 'Customer & employee headlines', minutes: 5, hint: 'One-sentence headlines. Anything bigger becomes an issue.' },
+    { id: 'todos', name: 'To-do list', minutes: 5, hint: 'Done or not done. The bar is 90%.' },
+    { id: 'ids', name: 'IDS', minutes: 60, hint: 'Pick the three most important. Identify, Discuss, Solve — solved means a to-do.' },
+    { id: 'conclude', name: 'Conclude', minutes: 5, hint: 'Recap to-dos, agree cascading messages, rate the meeting 1–10.' },
+  ],
+  Quarterly: [
+    { id: 'segue', name: 'Segue', minutes: 30, hint: 'Best business and personal highlights of the quarter.' },
+    { id: 'review', name: 'Review the prior quarter', minutes: 60, hint: 'Numbers first, then each rock: done or not done. No partial credit.' },
+    { id: 'rocks', name: 'Rock review', minutes: 30, hint: 'Close out the quarter’s rocks before setting new ones.' },
+    { id: 'vto', name: 'V/TO review', minutes: 60, hint: 'Re-read the vision. Argue with it now or live with it for ninety days.' },
+    { id: 'setrocks', name: 'Set next quarter’s rocks', minutes: 120, hint: 'Three to seven per person, one owner each. Create them in Rocks as you go.' },
+    { id: 'ids', name: 'IDS', minutes: 180, hint: 'The quarter’s big issues, worked with the whole day’s context.' },
+    { id: 'conclude', name: 'Next steps and conclude', minutes: 30, hint: 'Who says what to whom. Rate the day 1–10.' },
+  ],
+  Annual: [
+    { id: 'segue', name: 'Segue', minutes: 30, hint: 'The year’s highlights, personal and business.' },
+    { id: 'review', name: 'Review the year', minutes: 90, hint: 'Numbers, rocks, and what the scorecard says about the year.' },
+    { id: 'team', name: 'Team health', minutes: 120, hint: 'One conversation, everybody honest. This is the point of the day.' },
+    { id: 'vto', name: 'V/TO — the full pass', minutes: 180, hint: 'Core values, focus, ten-year target, marketing strategy, three-year picture.' },
+    { id: 'plan', name: 'One-year plan', minutes: 120, hint: 'Revenue, profit, and the measurables for next year.' },
+    { id: 'setrocks', name: 'Set Q1 rocks', minutes: 90, hint: 'The first quarter of the new plan, owned and dated.' },
+    { id: 'ids', name: 'IDS', minutes: 120, hint: 'Whatever the day surfaced.' },
+    { id: 'conclude', name: 'Conclude', minutes: 30, hint: 'Cascading messages and a rating for the day.' },
+  ],
+}
+
+/**
+ * The operating cadence. These configs are deliberately thin: a meeting is run
+ * from its own page, not from the grid, and everything else is a light list.
+ */
+const TRACTION: Partial<Record<TableId, TableConfig>> = {
+  meetings: {
+    id: 'meetings',
+    name: 'Meetings',
+    singular: 'meeting',
+    icon: 'date',
+    color: '#c2415f',
+    space: 'traction',
+    views: [
+      { id: 'grid', name: 'All meetings', type: 'grid', icon: 'grid' },
+      {
+        id: 'timeline', name: 'Calendar', type: 'timeline', icon: 'timeline',
+        startField: 'heldOn', endField: 'heldOn', colorField: 'type', labelField: 'status',
+      },
+    ],
+    fields: [
+      { id: 'label', label: 'Meeting', type: 'text', width: 220, primary: true, computed: true },
+      { id: 'type', label: 'Type', type: 'select', width: 116, options: MEETING_TYPE },
+      { id: 'heldOn', label: 'Held on', type: 'date', width: 118 },
+      { id: 'status', label: 'Status', type: 'select', width: 130, options: MEETING_STATUS },
+      { id: 'ownerId', label: 'Runs it', type: 'user', width: 150, linkTo: 'team' },
+      { id: 'rating', label: 'Rating', type: 'number', width: 92, computed: true },
+      { id: 'durationMinutes', label: 'Length', type: 'duration', width: 100 },
+      { id: 'headlines', label: 'Headlines', type: 'longtext', width: 320, secondary: true },
+      { id: 'cascadingMessages', label: 'Cascading messages', type: 'longtext', width: 320, secondary: true },
+      { id: 'notes', label: 'Notes', type: 'longtext', width: 320, secondary: true },
+    ],
+  },
+
+  rocks: {
+    id: 'rocks',
+    name: 'Rocks',
+    singular: 'rock',
+    icon: 'target',
+    color: '#c2415f',
+    space: 'traction',
+    views: [
+      { id: 'board', name: 'By status', type: 'board', icon: 'board', groupBy: 'status' },
+      { id: 'grid', name: 'All rocks', type: 'grid', icon: 'grid' },
+    ],
+    fields: [
+      { id: 'title', label: 'Rock', type: 'text', width: 300, primary: true },
+      { id: 'quarter', label: 'Quarter', type: 'text', width: 104 },
+      { id: 'status', label: 'Status', type: 'select', width: 118, options: ROCK_STATUS },
+      { id: 'scope', label: 'Scope', type: 'select', width: 118, options: ROCK_SCOPE },
+      { id: 'ownerId', label: 'Owner', type: 'user', width: 150, linkTo: 'team' },
+      { id: 'dueDate', label: 'Due', type: 'date', width: 110 },
+      { id: 'daysLeft', label: 'Days left', type: 'number', width: 100, computed: true },
+      { id: 'notes', label: 'Notes', type: 'longtext', width: 320, secondary: true },
+    ],
+  },
+
+  measurables: {
+    id: 'measurables',
+    name: 'Scorecard',
+    singular: 'measurable',
+    icon: 'num',
+    color: '#c2415f',
+    space: 'traction',
+    views: [{ id: 'grid', name: 'Measurables', type: 'grid', icon: 'grid' }],
+    fields: [
+      { id: 'name', label: 'Measurable', type: 'text', width: 240, primary: true },
+      { id: 'ownerId', label: 'Owner', type: 'user', width: 150, linkTo: 'team' },
+      { id: 'unit', label: 'Unit', type: 'select', width: 110, options: MEASURABLE_UNIT },
+      { id: 'direction', label: 'Direction', type: 'select', width: 106, options: MEASURABLE_DIRECTION },
+      { id: 'goal', label: 'Goal', type: 'text', width: 110, computed: true },
+      { id: 'latest', label: 'Latest week', type: 'text', width: 120, computed: true },
+      { id: 'hitRate13', label: 'Hit rate (13w)', type: 'percent', width: 122, computed: true },
+      { id: 'active', label: 'Active', type: 'check', width: 86 },
+      { id: 'sequence', label: 'Order', type: 'number', width: 88, secondary: true },
+      /** Cents / bps / count — same tri-unit convention as a target's Raw value. */
+      { id: 'goalValue', label: 'Goal (raw)', type: 'number', width: 110, secondary: true },
+      { id: 'notes', label: 'Where the number comes from', type: 'longtext', width: 320, secondary: true },
+    ],
+  },
+
+  scorecardEntries: {
+    id: 'scorecardEntries',
+    name: 'Scorecard entries',
+    singular: 'entry',
+    icon: 'grid',
+    color: '#c2415f',
+    space: 'traction',
+    views: [{ id: 'grid', name: 'All entries', type: 'grid', icon: 'grid' }],
+    fields: [
+      { id: 'display', label: 'Entry', type: 'text', width: 260, primary: true, computed: true },
+      { id: 'measurableId', label: 'Measurable', type: 'link', width: 220, linkTo: 'measurables' },
+      { id: 'weekStarting', label: 'Week of', type: 'date', width: 118 },
+      /** Raw units — cents/bps/count, like a target's Raw value. displayValue is the readable one. */
+      { id: 'value', label: 'Value (raw)', type: 'number', width: 110 },
+      { id: 'displayValue', label: 'Value', type: 'text', width: 110, computed: true },
+      { id: 'notes', label: 'Notes', type: 'longtext', width: 300, secondary: true },
+    ],
+  },
+
+  todos: {
+    id: 'todos',
+    name: 'To-dos',
+    singular: 'to-do',
+    icon: 'check',
+    color: '#c2415f',
+    space: 'traction',
+    views: [{ id: 'grid', name: 'All to-dos', type: 'grid', icon: 'grid' }],
+    fields: [
+      { id: 'title', label: 'To-do', type: 'text', width: 320, primary: true },
+      { id: 'ownerId', label: 'Owner', type: 'user', width: 150, linkTo: 'team' },
+      { id: 'done', label: 'Done', type: 'check', width: 84 },
+      { id: 'dueDate', label: 'Due', type: 'date', width: 110 },
+      { id: 'late', label: 'Late', type: 'flag', width: 120, computed: true },
+      { id: 'meetingId', label: 'Raised in', type: 'link', width: 180, linkTo: 'meetings' },
+      { id: 'notes', label: 'Notes', type: 'longtext', width: 300, secondary: true },
+    ],
+  },
+
+  issues: {
+    id: 'issues',
+    name: 'Issues',
+    singular: 'issue',
+    icon: 'warn',
+    color: '#c2415f',
+    space: 'traction',
+    views: [
+      { id: 'board', name: 'IDS board', type: 'board', icon: 'board', groupBy: 'status' },
+      { id: 'grid', name: 'All issues', type: 'grid', icon: 'grid' },
+    ],
+    fields: [
+      { id: 'title', label: 'Issue', type: 'text', width: 340, primary: true },
+      { id: 'status', label: 'Status', type: 'select', width: 112, options: EOS_ISSUE_STATUS },
+      { id: 'ownerId', label: 'Owner', type: 'user', width: 150, linkTo: 'team' },
+      { id: 'ageDays', label: 'Age (days)', type: 'number', width: 104, computed: true },
+      { id: 'solvedInMeetingId', label: 'Solved in', type: 'link', width: 180, linkTo: 'meetings' },
+      { id: 'notes', label: 'Notes', type: 'longtext', width: 300, secondary: true },
+    ],
+  },
+}
+
+export const TABLES = { ...PHASE_1, ...PHASE_2, ...REVENUE, ...AUDIT, ...TRACTION } as Record<TableId, TableConfig>
 
 /**
  * What the New-record form asks for, per table.
@@ -1258,6 +1483,26 @@ export const CREATE_SPEC: Partial<Record<TableId, CreateSpec>> = {
   absences: { required: ['teamMemberId', 'type', 'startDate', 'endDate', 'workingDays'] },
   changeRequests: { required: ['title', 'projectId', 'raisedDate'], hide: ['approvedDate'] },
   risks: { required: ['title', 'projectId', 'category', 'probability', 'impact'], hide: ['resolvedDate'] },
+  meetings: {
+    required: ['type', 'heldOn'],
+    // status moves only through startMeeting/concludeMeeting; the texts are written in the room.
+    hide: ['status', 'headlines', 'cascadingMessages'],
+    note: 'Create it, then run it from its own page — open the meeting from its record panel.',
+  },
+  rocks: {
+    required: ['title', 'quarter', 'ownerId'],
+    note: 'Quarter looks like 2026-Q3. Due date defaults to the end of it.',
+  },
+  scorecardEntries: {
+    required: ['measurableId', 'weekStarting', 'value'],
+    note: 'Enter money in euros and percent as a percentage — converted to raw units on save. The week snaps to its Monday.',
+  },
+  todos: {
+    required: ['title', 'ownerId'],
+    hide: ['done'],
+    note: 'Due in 7 days unless you say otherwise — that is the cadence.',
+  },
+  issues: { required: ['title'], hide: ['solvedInMeetingId'] },
 }
 
 /** Deals gained a portfolio link in Phase 2. */

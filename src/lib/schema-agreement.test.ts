@@ -26,6 +26,8 @@ const DRIZZLE = {
   sprints: t.sprints, timeEntries: t.timeEntries, allocations: t.allocations, absences: t.absences,
   changeRequests: t.changeRequests, risks: t.risks, subscriptions: t.subscriptions,
   invoices: t.invoices, payments: t.payments, audit: t.auditLog, clients: t.organizations,
+  meetings: t.meetings, rocks: t.rocks, measurables: t.measurables,
+  scorecardEntries: t.scorecardEntries, todos: t.eosTodos, issues: t.eosIssues,
 } as const satisfies Record<TableId, unknown>
 
 const NON_INPUT_TYPES = ['multi', 'progress', 'flag']
@@ -54,6 +56,8 @@ const SET_BY_CREATE_RULES: Partial<Record<TableId, string[]>> = {
   timeEntries: ['costRateCents', 'billRateCents'],
   // A client is an organization that has bought something.
   clients: ['lifecycle', 'types'],
+  // Due in seven days — that is the cadence.
+  todos: ['dueDate'],
 }
 
 const columnsFor = (id: TableId) => getTableColumns(DRIZZLE[id] as Parameters<typeof getTableColumns>[0])
@@ -174,7 +178,7 @@ describe('config against the database schema', () => {
   })
 
   test('every table is creatable except the audit log', () => {
-    const bespoke = ['deals', 'organizations', 'targets', 'team', 'invoices', 'payments']
+    const bespoke = ['deals', 'organizations', 'targets', 'team', 'invoices', 'payments', 'measurables']
     const uncreatable = TABLE_IDS.filter((id) => !CREATE_SPEC[id] && !bespoke.includes(id))
 
     // The audit log is written by the server and by nobody else. Any other

@@ -6,10 +6,11 @@ import type { LinkRef, Row, TableId } from '@/lib/types'
 import {
   accountHealth, budgetWarning, cycleTimeDays, daysUntilRenewal, dealMoney, hygieneFlag,
   invoiceState, isOpenStage, isOpenTask, projectFinancials, projectRollup, qualificationScore,
-  riskSeverity, timeIsInvoiced,
+  averageRating, measurableOnTrack, quarterOf, riskSeverity, rockCompletionBps,
+  scorecardHitRateBps, scorecardWeeks, timeIsInvoiced, todoCompletionBps,
 } from './compute'
 import { daysBetween, toISODate } from '@/lib/format'
-import { TARGET_METRIC_UNIT } from '@/lib/tables'
+import { MEETING_AGENDA, TARGET_METRIC_UNIT } from '@/lib/tables'
 import { canRead, canSeeCost } from '@/lib/permissions'
 import { auth } from '@/auth'
 
@@ -641,6 +642,151 @@ async function riskRows(): Promise<Row[]> {
   }))
 }
 
+/* ==========================================================================
+ * TRACTION LOADERS
+ * ========================================================================== */
+
+/** Raw units → what a person reads: cents to euros, bps to a percentage. */
+function formatMeasurableValue(value: number, unit: string): string {
+  if (unit === 'Money') return `€${Math.round(value / 100).toLocaleString('en-IE')}`
+  if (unit === 'Percent') return `${value / 100}%`
+  return String(value)
+}
+
+async function meetingRows(): Promise<Row[]> {
+  const rows = await db.query.meetings.findMany({
+    with: { owner: { columns: { id: true, name: true } } },
+    orderBy: [desc(t.meetings.heldOn)],
+  })
+  return rows.map((x): Row => ({
+    id: x.id,
+    label: `${x.type} · ${x.heldOn}`,
+    type: x.type,
+    heldOn: x.heldOn,
+    status: x.status,
+    ownerId: ref('team', x.owner?.id, x.owner?.name),
+    rating: x.rating,
+    durationMinutes: x.durationMinutes,
+    headlines: x.headlines,
+    cascadingMessages: x.cascadingMessages,
+    notes: x.notes,
+  }))
+}
+
+async function rockRows(): Promise<Row[]> {
+  const today = new Date().toISOString().slice(0, 10)
+  const rows = await db.query.rocks.findMany({
+    with: { owner: { columns: { id: true, name: true } } },
+    orderBy: [desc(t.rocks.quarter), t.rocks.title],
+  })
+  return rows.map((x): Row => ({
+    id: x.id,
+    title: x.title,
+    quarter: x.quarter,
+    scope: x.scope,
+    status: x.status,
+    ownerId: ref('team', x.owner?.id, x.owner?.name),
+    dueDate: x.dueDate,
+    // Negative once the due date has passed — a countdown that keeps counting.
+    daysLeft: x.dueDate && x.status !== 'Done' && x.status !== 'Dropped'
+      ? daysBetween(today, x.dueDate)
+      : null,
+    notes: x.notes,
+  }))
+}
+
+async function measurableRows(): Promise<Row[]> {
+  const rows = await db.query.measurables.findMany({
+    with: { entries: { orderBy: [desc(t.scorecardEntries.weekStarting)], limit: 13 } },
+    orderBy: [t.measurables.sequence, t.measurables.name],
+  })
+  const owners = await db.query.teamMembers.findMany({ columns: { id: true, name: true } })
+  const ownerName = new Map(owners.map((o) => [o.id, o.name]))
+
+  return rows.map((x): Row => {
+    const latest = x.entries[0]
+    return {
+      id: x.id,
+      name: x.name,
+      ownerId: ref('team', x.ownerId, x.ownerId ? ownerName.get(x.ownerId) ?? null : null),
+      unit: x.unit,
+      direction: x.direction,
+      goal: formatMeasurableValue(x.goalValue, x.unit),
+      latest: latest ? formatMeasurableValue(latest.value, x.unit) : null,
+      // Over the weeks that were recorded, not the calendar — see compute.ts.
+      hitRate13: scorecardHitRateBps(x.entries.map((e) => e.value), x.goalValue, x.direction),
+      active: x.active,
+      sequence: x.sequence,
+      goalValue: x.goalValue,
+      notes: x.notes,
+    }
+  })
+}
+
+async function scorecardEntryRows(): Promise<Row[]> {
+  const rows = await db.query.scorecardEntries.findMany({
+    with: { measurable: { columns: { id: true, name: true, unit: true } } },
+    orderBy: [desc(t.scorecardEntries.weekStarting)],
+  })
+  return rows.map((x): Row => ({
+    id: x.id,
+    display: `${x.measurable?.name ?? 'Entry'} · ${x.weekStarting}`,
+    measurableId: ref('measurables', x.measurable?.id, x.measurable?.name),
+    weekStarting: x.weekStarting,
+    value: x.value,
+    displayValue: x.measurable ? formatMeasurableValue(x.value, x.measurable.unit) : String(x.value),
+    notes: x.notes,
+  }))
+}
+
+async function todoRows(): Promise<Row[]> {
+  const today = new Date().toISOString().slice(0, 10)
+  const rows = await db.query.eosTodos.findMany({
+    with: {
+      owner: { columns: { id: true, name: true } },
+      meeting: { columns: { id: true, type: true, heldOn: true } },
+    },
+    // Open first, nearest due date on top.
+    orderBy: [t.eosTodos.done, t.eosTodos.dueDate],
+  })
+  return rows.map((x): Row => ({
+    id: x.id,
+    title: x.title,
+    ownerId: ref('team', x.owner?.id, x.owner?.name),
+    done: x.done,
+    dueDate: x.dueDate,
+    late: !x.done && x.dueDate < today ? 'Overdue' : null,
+    meetingId: ref('meetings', x.meeting?.id, x.meeting ? `${x.meeting.type} · ${x.meeting.heldOn}` : null),
+    notes: x.notes,
+  }))
+}
+
+async function issueRows(): Promise<Row[]> {
+  const today = new Date().toISOString().slice(0, 10)
+  const rows = await db.query.eosIssues.findMany({
+    with: {
+      owner: { columns: { id: true, name: true } },
+      solvedInMeeting: { columns: { id: true, type: true, heldOn: true } },
+    },
+    // Open before Solved before Dropped (enum order), oldest first — the IDS
+    // list is worked from the top.
+    orderBy: [t.eosIssues.status, t.eosIssues.createdAt],
+  })
+  return rows.map((x): Row => ({
+    id: x.id,
+    title: x.title,
+    status: x.status,
+    ownerId: ref('team', x.owner?.id, x.owner?.name),
+    ageDays: daysBetween(iso(x.createdAt) ?? today, today),
+    solvedInMeetingId: ref(
+      'meetings',
+      x.solvedInMeeting?.id,
+      x.solvedInMeeting ? `${x.solvedInMeeting.type} · ${x.solvedInMeeting.heldOn}` : null,
+    ),
+    notes: x.notes,
+  }))
+}
+
 /* ------------------------------------------------------------------ entry */
 
 const LOADERS: Record<TableId, () => Promise<Row[]>> = {
@@ -667,6 +813,12 @@ const LOADERS: Record<TableId, () => Promise<Row[]>> = {
   invoices: invoiceRows,
   payments: paymentRows,
   audit: auditRows,
+  meetings: meetingRows,
+  rocks: rockRows,
+  measurables: measurableRows,
+  scorecardEntries: scorecardEntryRows,
+  todos: todoRows,
+  issues: issueRows,
 }
 
 /**
@@ -711,6 +863,7 @@ export async function getRows(table: TableId): Promise<Row[]> {
 const EMPTY_LOOKUPS = (): Record<string, { id: string; label: string }[]> => ({
   organizations: [], contacts: [], team: [], sources: [], deals: [], portfolio: [],
   projects: [], milestones: [], sprints: [], tasks: [], invoices: [], subscriptions: [],
+  meetings: [], measurables: [],
 })
 
 /**
@@ -749,6 +902,22 @@ export async function getLookups(): Promise<Record<string, { id: string; label: 
     for (const row of rowsOf<{ kind: string; id: string; label: string | null }>(rows)) {
       grouped[row.kind]?.push({ id: row.id, label: row.label ?? '' })
     }
+
+    // The Traction arms ride separately on purpose: a UNION fails as a whole,
+    // so putting a new table in the main query means a deployment that beats
+    // its migration empties every picker in the app rather than two of them.
+    try {
+      const traction = await db.execute<{ kind: string; id: string; label: string | null }>(sql`
+                  select 'meetings'  as kind, id, type::text || ' · ' || held_on::text as label from ${t.meetings}
+        union all select 'measurables',       id, name                                          from ${t.measurables}
+      `)
+      for (const row of rowsOf<{ kind: string; id: string; label: string | null }>(traction)) {
+        grouped[row.kind]?.push({ id: row.id, label: row.label ?? '' })
+      }
+    } catch (error) {
+      console.error('traction lookups failed; their pickers render empty', error)
+    }
+
     for (const bucket of Object.values(grouped)) bucket.sort((a, b) => a.label.localeCompare(b.label))
     return grouped
   } catch (error) {
@@ -1589,3 +1758,148 @@ export async function getProject(id: string) {
 }
 
 export type ProjectCockpit = NonNullable<Awaited<ReturnType<typeof getProject>>>
+
+/* ==========================================================================
+ * THE MEETING — everything one L10 needs, in one payload
+ * ========================================================================== */
+
+/**
+ * The run page's single query fan-out. Everything the agenda touches comes
+ * down together: the scorecard matrix, the quarter's rocks, the to-do list,
+ * the open issues, and enough context to add or resolve any of them without
+ * another round trip.
+ */
+export async function getMeeting(id: string) {
+  const meeting = await db.query.meetings.findFirst({
+    where: eq(t.meetings.id, id),
+    with: { owner: { columns: { id: true, name: true } } },
+  })
+  if (!meeting) return null
+
+  const weeks = scorecardWeeks(meeting.heldOn)
+  const quarter = quarterOf(meeting.heldOn)
+
+  const [measurableList, rockList, todoList, issueList, team, pastRatings] = await Promise.all([
+    db.query.measurables.findMany({
+      where: eq(t.measurables.active, true),
+      with: { entries: true },
+      orderBy: [t.measurables.sequence, t.measurables.name],
+    }),
+    db.query.rocks.findMany({
+      where: eq(t.rocks.quarter, quarter),
+      with: { owner: { columns: { id: true, name: true } } },
+      // Company rocks first, then by owner — the order the segment reads them.
+      orderBy: [t.rocks.scope, t.rocks.title],
+    }),
+    db.query.eosTodos.findMany({
+      with: { owner: { columns: { id: true, name: true } } },
+      orderBy: [t.eosTodos.dueDate],
+    }),
+    db.query.eosIssues.findMany({
+      with: { owner: { columns: { id: true, name: true } } },
+      orderBy: [t.eosIssues.createdAt],
+    }),
+    db.query.teamMembers.findMany({
+      where: eq(t.teamMembers.status, 'Active'),
+      columns: { id: true, name: true },
+      orderBy: [t.teamMembers.name],
+    }),
+    db.query.meetings.findMany({
+      where: eq(t.meetings.status, 'Concluded'),
+      columns: { rating: true },
+      orderBy: [desc(t.meetings.heldOn)],
+      limit: 10,
+    }),
+  ])
+
+  const weekSet = new Set(weeks)
+  const today = new Date().toISOString().slice(0, 10)
+
+  return {
+    meeting: {
+      id: meeting.id,
+      type: meeting.type,
+      heldOn: meeting.heldOn,
+      status: meeting.status,
+      rating: meeting.rating,
+      durationMinutes: meeting.durationMinutes,
+      headlines: meeting.headlines,
+      cascadingMessages: meeting.cascadingMessages,
+      notes: meeting.notes,
+      owner: meeting.owner ? { id: meeting.owner.id, name: meeting.owner.name } : null,
+    },
+    agenda: MEETING_AGENDA[meeting.type] ?? MEETING_AGENDA.L10,
+    weeks,
+    scorecard: measurableList.map((m) => {
+      const byWeek = new Map(
+        m.entries.filter((e) => weekSet.has(e.weekStarting)).map((e) => [e.weekStarting, e.value]),
+      )
+      const recorded = weeks.filter((w) => byWeek.has(w)).map((w) => byWeek.get(w) as number)
+      const latest = recorded.length ? recorded[recorded.length - 1] : null
+      return {
+        id: m.id,
+        name: m.name,
+        unit: m.unit,
+        direction: m.direction,
+        goalValue: m.goalValue,
+        goalDisplay: formatMeasurableValue(m.goalValue, m.unit),
+        cells: weeks.map((w) => {
+          const value = byWeek.get(w)
+          return value === undefined
+            ? { week: w, value: null, display: '', onTrack: null }
+            : {
+                week: w,
+                value,
+                display: formatMeasurableValue(value, m.unit),
+                onTrack: measurableOnTrack(value, m.goalValue, m.direction),
+              }
+        }),
+        // Off track on the latest recorded week is what "drop it to the
+        // issues list" keys on.
+        offTrack: latest !== null && !measurableOnTrack(latest, m.goalValue, m.direction),
+        hitRateBps: scorecardHitRateBps(recorded, m.goalValue, m.direction),
+      }
+    }),
+    rocks: rockList.map((r) => ({
+      id: r.id,
+      title: r.title,
+      scope: r.scope,
+      status: r.status,
+      dueDate: r.dueDate,
+      owner: r.owner ? { id: r.owner.id, name: r.owner.name } : null,
+    })),
+    rockCompletionBps: rockCompletionBps(rockList),
+    todos: {
+      open: todoList
+        .filter((td) => !td.done)
+        .map((td) => ({
+          id: td.id,
+          title: td.title,
+          dueDate: td.dueDate,
+          overdue: td.dueDate < today,
+          owner: td.owner ? { id: td.owner.id, name: td.owner.name } : null,
+        })),
+      // The bar is measured against what was due by the meeting, not by today —
+      // running the page a day late must not move the number.
+      completionBps: todoCompletionBps(todoList, meeting.heldOn),
+      doneCount: todoList.filter((td) => td.done).length,
+    },
+    issues: {
+      open: issueList
+        .filter((i) => i.status === 'Open')
+        .map((i) => ({
+          id: i.id,
+          title: i.title,
+          ageDays: daysBetween(iso(i.createdAt) ?? today, today),
+          owner: i.owner ? { id: i.owner.id, name: i.owner.name } : null,
+        })),
+      solvedHere: issueList
+        .filter((i) => i.solvedInMeetingId === id)
+        .map((i) => ({ id: i.id, title: i.title })),
+    },
+    team,
+    averageRating: averageRating(pastRatings.map((m) => m.rating)),
+  }
+}
+
+export type MeetingCockpit = NonNullable<Awaited<ReturnType<typeof getMeeting>>>

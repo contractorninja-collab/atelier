@@ -574,3 +574,53 @@ aside.sb.collapsed .hide-c { display: none; }
 }
 .gf-req { font-size: 10.5px; font-weight: 600; color: var(--accent-600); letter-spacing: 0.02em; }
 .gf-hint { font-size: 11.5px; color: var(--ink-3); margin: 5px 0 0; }
+
+/* ------------------------------------------------------------- the meeting */
+
+.mtg-seg { margin-top: 4px; }
+.mtg-seg h3 { display: flex; align-items: center; gap: 10px; }
+.mtg-n {
+  width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; background: var(--bg-2); color: var(--ink-2);
+  border: 1px solid var(--line);
+}
+.mtg-min { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--ink-3); }
+.mtg-hint { font-size: 12.5px; color: var(--ink-3); margin: 2px 0 10px; line-height: 1.55; }
+.mtg-err { font-size: 12px; color: var(--danger); margin: 6px 0 0; }
+.mtg-recap { font-size: 13px; line-height: 1.6; margin: 0 0 8px; }
+.mtg-bar { font-size: 12px; font-weight: 650; }
+.mtg-bar.ok { color: var(--success); }
+.mtg-bar.miss { color: var(--danger); }
+
+.mtg-todo, .mtg-issue {
+  display: flex; align-items: center; gap: 10px; padding: 7px 0;
+  border-bottom: 1px solid var(--line-2); font-size: 13px;
+}
+.mtg-todo-t { flex: 1; min-width: 0; }
+.mtg-who { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+.mtg-due { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+.mtg-due.late { color: var(--danger); font-weight: 650; }
+.mtg-age { font-size: 11.5px; font-weight: 650; color: var(--ink-3); }
+
+.mtg-add { display: flex; gap: 8px; margin-top: 12px; }
+.mtg-add input[type='text'] { flex: 1; }
+.mtg-add select { max-width: 170px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
+
+.mtg-conclude label { display: block; margin: 10px 0 4px; }
+.mtg-conclude textarea { width: 100%; resize: vertical; font-family: inherit; }
+.mtg-rate { display: flex; align-items: end; gap: 10px; margin-top: 12px; }
+.mtg-rate input { width: 80px; }
+.mtg-headlines { width: 100%; resize: vertical; font-family: inherit; }
+
+/* The 13-week scorecard matrix. */
+.sc-matrix { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+.sc-matrix th {
+  text-align: right; font-size: 10.5px; font-weight: 650; color: var(--ink-3);
+  padding: 4px 7px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.sc-matrix td { text-align: right; padding: 5px 7px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+.sc-matrix .sc-name { text-align: left; font-weight: 600; min-width: 160px; }
+.sc-matrix .sc-goal { color: var(--ink-2); }
+.sc-miss { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, transparent); font-weight: 650; }
+.sc-hit { color: var(--ink); }
+.sc-empty { color: var(--ink-3); }

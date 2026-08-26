@@ -13,10 +13,11 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  accountHealth, addMonths, agingBucket, dealMoney, daysUntilRenewal, hygieneFlag,
-  formatInvoiceNumber, invoiceState, milestoneCompletionBps, nextInvoiceNumber, nextRenewalDate,
-  projectFinancials, projectRollup,
-  qualificationScore, timeIsInvoiced, utilisationBps,
+  accountHealth, addMonths, agingBucket, averageRating, dealMoney, daysUntilRenewal, hygieneFlag,
+  formatInvoiceNumber, invoiceState, measurableOnTrack, milestoneCompletionBps, mondayOf,
+  nextInvoiceNumber, nextRenewalDate, projectFinancials, projectRollup,
+  qualificationScore, quarterEndDate, quarterOf, rockCompletionBps, scorecardHitRateBps,
+  scorecardWeeks, timeIsInvoiced, todoCompletionBps, utilisationBps,
 } from './compute'
 import { MILESTONE_TEMPLATE, TARGET_METRIC_UNIT } from '@/lib/tables'
 
@@ -565,5 +566,110 @@ describe('target units', () => {
     // 75% entered -> 7500 bps stored -> 75% displayed.
     const storedPercent = Math.round(75 * 100)
     assert.equal(storedPercent / 100, 75)
+  })
+})
+
+/* ------------------------------------------------------------------ traction */
+
+describe('quarterOf / quarterEndDate', () => {
+  test('maps months to their quarters at the boundaries', () => {
+    assert.equal(quarterOf('2026-01-01'), '2026-Q1')
+    assert.equal(quarterOf('2026-03-31'), '2026-Q1')
+    assert.equal(quarterOf('2026-04-01'), '2026-Q2')
+    assert.equal(quarterOf('2026-12-31'), '2026-Q4')
+  })
+
+  test('quarter ends land on the real last day, leap February included', () => {
+    assert.equal(quarterEndDate('2026-Q1'), '2026-03-31')
+    assert.equal(quarterEndDate('2026-Q2'), '2026-06-30')
+    assert.equal(quarterEndDate('2026-Q4'), '2026-12-31')
+    // 2028 is a leap year; Q1 still ends in March, but the month arithmetic
+    // must not be fooled by February having 29 days.
+    assert.equal(quarterEndDate('2028-Q1'), '2028-03-31')
+  })
+
+  test('a malformed quarter throws rather than returning nonsense', () => {
+    assert.throws(() => quarterEndDate('2026-Q5'))
+    assert.throws(() => quarterEndDate('Q3-2026'))
+  })
+})
+
+describe('mondayOf / scorecardWeeks', () => {
+  test('a Monday maps to itself', () => {
+    assert.equal(mondayOf('2026-08-24'), '2026-08-24')
+  })
+
+  test('every other weekday walks back to its Monday, Sunday furthest', () => {
+    assert.equal(mondayOf('2026-08-26'), '2026-08-24') // Wednesday
+    assert.equal(mondayOf('2026-08-29'), '2026-08-24') // Saturday
+    assert.equal(mondayOf('2026-08-30'), '2026-08-24') // Sunday — 6 back, not 1 forward
+  })
+
+  test('crosses a year boundary without flinching', () => {
+    // 2026-01-01 is a Thursday; its Monday is 2025-12-29.
+    assert.equal(mondayOf('2026-01-01'), '2025-12-29')
+  })
+
+  test('scorecardWeeks ends at the anchor week and counts backwards', () => {
+    const weeks = scorecardWeeks('2026-08-26', 3)
+    assert.deepEqual(weeks, ['2026-08-10', '2026-08-17', '2026-08-24'])
+    assert.equal(scorecardWeeks('2026-08-26').length, 13)
+  })
+})
+
+describe('measurableOnTrack / scorecardHitRateBps', () => {
+  test('AtLeast wants the value at or above goal, AtMost at or below', () => {
+    assert.equal(measurableOnTrack(12_000_00, 12_000_00, 'AtLeast'), true)
+    assert.equal(measurableOnTrack(11_999_99, 12_000_00, 'AtLeast'), false)
+    assert.equal(measurableOnTrack(15, 15, 'AtMost'), true)
+    assert.equal(measurableOnTrack(16, 15, 'AtMost'), false)
+  })
+
+  test('hit rate is over recorded weeks only, and no data is null not zero', () => {
+    assert.equal(scorecardHitRateBps([10, 20, 5, 30], 15, 'AtLeast'), 5_000)
+    assert.equal(scorecardHitRateBps([], 15, 'AtLeast'), null)
+  })
+})
+
+describe('todoCompletionBps', () => {
+  test('only to-dos whose due date has arrived count as due', () => {
+    const todos = [
+      { done: true, dueDate: '2026-08-20' },   // due, done
+      { done: false, dueDate: '2026-08-25' },  // due, not done
+      { done: false, dueDate: '2026-09-01' },  // not yet due — must not count
+    ]
+    assert.equal(todoCompletionBps(todos, '2026-08-26'), 5_000)
+  })
+
+  test('nothing due yet is null, not a perfect score and not a zero', () => {
+    assert.equal(todoCompletionBps([{ done: false, dueDate: '2026-09-01' }], '2026-08-26'), null)
+    assert.equal(todoCompletionBps([], '2026-08-26'), null)
+  })
+})
+
+describe('rockCompletionBps', () => {
+  test('dropped rocks were descoped, not failed — they leave the denominator', () => {
+    const rocks = [
+      { status: 'Done' }, { status: 'OnTrack' }, { status: 'OffTrack' }, { status: 'Dropped' },
+    ]
+    assert.equal(rockCompletionBps(rocks), Math.round((1 / 3) * 10_000))
+  })
+
+  test('no rocks — or only dropped ones — is null', () => {
+    assert.equal(rockCompletionBps([]), null)
+    assert.equal(rockCompletionBps([{ status: 'Dropped' }]), null)
+  })
+})
+
+describe('averageRating', () => {
+  test('averages what exists, to one decimal', () => {
+    assert.equal(averageRating([8, 7, 9]), 8)
+    assert.equal(averageRating([8, null, 7]), 7.5)
+    assert.equal(averageRating([7, 8, 8]), 7.7)
+  })
+
+  test('no ratings is null', () => {
+    assert.equal(averageRating([]), null)
+    assert.equal(averageRating([null, null]), null)
   })
 })

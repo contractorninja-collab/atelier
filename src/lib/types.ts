@@ -78,6 +78,13 @@ export type TableId =
   | 'invoices'
   | 'payments'
   | 'audit'
+  // Traction — the EOS operating cadence
+  | 'meetings'
+  | 'rocks'
+  | 'measurables'
+  | 'scorecardEntries'
+  | 'todos'
+  | 'issues'
 
 export type TableConfig = {
   id: TableId
