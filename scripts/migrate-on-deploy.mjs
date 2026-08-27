@@ -22,5 +22,20 @@ if (!process.env.DIRECT_URL && !process.env.DATABASE_URL) {
 }
 
 console.log('migrate-on-deploy: applying pending migrations…')
-execSync('npx drizzle-kit migrate', { stdio: 'inherit' })
+
+/**
+ * One retry, because the Supabase pooler occasionally refuses the first
+ * connection outright (its 15 slots exhaust during deploy overlap — a build
+ * has died to exactly this). A refusal is instant, so a short pause and a
+ * second attempt clears it; a real migration failure fails both attempts and
+ * takes the build down, which is what should happen.
+ */
+try {
+  execSync('npx drizzle-kit migrate', { stdio: 'inherit' })
+} catch {
+  console.log('migrate-on-deploy: first attempt failed — retrying in 10s…')
+  await new Promise((resolve) => setTimeout(resolve, 10_000))
+  execSync('npx drizzle-kit migrate', { stdio: 'inherit' })
+}
+
 console.log('migrate-on-deploy: done.')
