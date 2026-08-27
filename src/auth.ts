@@ -2,9 +2,23 @@ import NextAuth from 'next-auth'
 import Google from 'next-auth/providers/google'
 import Resend from 'next-auth/providers/resend'
 import { DrizzleAdapter } from '@auth/drizzle-adapter'
-import { eq } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { accounts, sessions, teamMembers, users, verificationTokens } from '@/db/schema'
+
+/**
+ * Case-insensitive, whitespace-proof membership lookup.
+ *
+ * The login address arrives lowercased, but the Team row holds whatever an
+ * admin typed — and `Arber@gmail.com` with a capital A, or a pasted trailing
+ * space, silently fails an exact match. The person then gets "not on the team
+ * yet" while staring at their own row in the grid. Compare loosely here, once,
+ * for every path that asks "is this address on the team?".
+ */
+const memberByEmail = (email: string) =>
+  db.query.teamMembers.findFirst({
+    where: sql`lower(trim(${teamMembers.email})) = ${email.trim().toLowerCase()}`,
+  })
 
 const allowedDomains = (process.env.ALLOWED_EMAIL_DOMAINS ?? '')
   .split(',')
@@ -49,18 +63,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!allowedDomains.includes(domain)) return false
       }
 
-      const member = await db.query.teamMembers.findFirst({
-        where: eq(teamMembers.email, email),
-      })
+      const member = await memberByEmail(email)
       return Boolean(member)
     },
 
     async session({ session, user }) {
       if (session.user) {
         session.user.id = user.id
-        const member = await db.query.teamMembers.findFirst({
-          where: eq(teamMembers.email, user.email.toLowerCase()),
-        })
+        const member = await memberByEmail(user.email)
         session.user.memberId = member?.id ?? null
         session.user.memberName = member?.name ?? user.name ?? user.email
         session.user.role = member?.role ?? null

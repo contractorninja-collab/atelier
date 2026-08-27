@@ -270,6 +270,9 @@ function prepareCellWrite(
   // Weights are entered as a percentage and stored in basis points.
   if (field.type === 'percent' && typeof value === 'string') value = Math.round(Number(value) * 100)
   if (fieldId === 'domain' && typeof value === 'string') value = normaliseDomain(value)
+  // Sign-in matches on this column; a pasted trailing space or a capital
+  // letter stored here locks the person out with "not on the team yet".
+  if (fieldId === 'email' && typeof value === 'string') value = value.trim().toLowerCase()
   /**
    * A `date` field may sit on a `date` column or a `timestamp` one, and Drizzle
    * treats them differently: a date column takes the ISO string as-is, a
