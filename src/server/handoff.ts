@@ -31,7 +31,14 @@ export const DELIVERY_DEAL_TYPES = ['Project', 'Hybrid', 'Retainer']
  * handoff by hand after it already ran, a double-submitted form: all must be
  * inert.
  */
-export async function spawnProjectForDeal(tx: Tx, dealId: string): Promise<string | null> {
+export type HandoffResult = {
+  message: string
+  projectId: string
+  projectName: string
+  pmId: string | null
+}
+
+export async function spawnProjectForDeal(tx: Tx, dealId: string): Promise<HandoffResult | null> {
   const deal = await tx.query.deals.findFirst({
     where: eq(t.deals.id, dealId),
     with: {
@@ -121,5 +128,12 @@ export async function spawnProjectForDeal(tx: Tx, dealId: string): Promise<strin
     })),
   )
 
-  return `${project.name} created with ${MILESTONE_TEMPLATE.length} milestones`
+  return {
+    message: `${project.name} created with ${MILESTONE_TEMPLATE.length} milestones`,
+    projectId: project.id,
+    projectName: project.name,
+    // Who ended up running it — so the caller can tell them, once the
+    // transaction has actually committed.
+    pmId: pm?.id ?? deal.ownerId,
+  }
 }

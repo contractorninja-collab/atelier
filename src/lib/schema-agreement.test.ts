@@ -16,6 +16,7 @@ import { getTableColumns } from 'drizzle-orm'
 import * as t from '@/db/schema'
 import { CREATE_SPEC, TABLES, TABLE_IDS } from './tables'
 import { WRITABLE } from './writable'
+import { ASSIGNMENT_FIELDS } from './assignments'
 import type { TableId } from './types'
 
 /** Mirrors TABLE_TO_DRIZZLE in actions.ts — clients ride on organizations. */
@@ -175,6 +176,26 @@ describe('config against the database schema', () => {
       unfillable, [],
       `NOT NULL with no default, and nothing supplies it — the insert will fail:\n  ${unfillable.join('\n  ')}`,
     )
+  })
+
+  test('every assignment field is a real, writable, user-type field', () => {
+    const bad: string[] = []
+
+    for (const [table, fields] of Object.entries(ASSIGNMENT_FIELDS)) {
+      const config = TABLES[table as TableId]
+      if (!config) { bad.push(`${table} — no such table`); continue }
+      for (const [fieldId, phrase] of Object.entries(fields ?? {})) {
+        const field = config.fields.find((f) => f.id === fieldId)
+        // An entry that drifts from the config never errors — it just silently
+        // stops sending, which is the worst way for a notification to fail.
+        if (!field) bad.push(`${table}.${fieldId} — no such field`)
+        else if (field.type !== 'user') bad.push(`${table}.${fieldId} — type ${field.type}, not user`)
+        if (!(WRITABLE[table as TableId] ?? []).includes(fieldId)) bad.push(`${table}.${fieldId} — not writable`)
+        if (!phrase || phrase.length < 5) bad.push(`${table}.${fieldId} — no phrase`)
+      }
+    }
+
+    assert.deepEqual(bad, [], `Assignment entries that cannot fire:\n  ${bad.join('\n  ')}`)
   })
 
   test('every table is creatable except the audit log', () => {

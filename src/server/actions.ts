@@ -13,11 +13,13 @@ import { canDelete, canWrite, refusal } from '@/lib/permissions'
 // Not defined here because 'use server' allows only async exports, which would
 // put this list beyond the reach of any test. See writable.ts.
 import { WRITABLE } from '@/lib/writable'
+import { ASSIGNMENT_FIELDS, assignmentPhrase } from '@/lib/assignments'
+import { notifyAssignment } from './notify'
 import { daysBetween, normaliseDomain, toISODate } from '@/lib/format'
 import { invoiceState, mondayOf, nextInvoiceNumber, nextRenewalDate, quarterEndDate } from './compute'
 // Not defined here on purpose: 'use server' would publish it as an endpoint, and
 // it has to be callable from a test with no session. See handoff.ts.
-import { spawnProjectForDeal } from './handoff'
+import { spawnProjectForDeal, type HandoffResult } from './handoff'
 import type { ActionResult, TableId } from '@/lib/types'
 
 /** Every action goes through this. No session, no write. */
@@ -291,13 +293,26 @@ export async function updateCell(input: z.infer<typeof cellSchema>): Promise<Act
 
     const prepared = prepareCellWrite(parsed.table, parsed.field, parsed.value)
     if (!prepared.ok) return prepared
-    await requirePermission(prepared.tableId, 'edit')
+    const member = await requirePermission(prepared.tableId, 'edit')
 
     const drizzleTable = TABLE_TO_DRIZZLE[prepared.tableId]
     await db
       .update(drizzleTable)
       .set({ [prepared.column]: prepared.value } as never)
       .where(eq(idOf(drizzleTable), parsed.id))
+
+    // Handing work to somebody sends them an email. After the commit, never
+    // instead of it: the row fetch rides as a thunk so it runs inside
+    // notifyAssignment's own never-throw try — a pooler blip while fetching
+    // the label must not report a committed write as failed.
+    if (typeof prepared.value === 'string' && prepared.value && assignmentPhrase(prepared.tableId, parsed.field)) {
+      await notifyAssignment({
+        actorMemberId: member.memberId, actorEmail: member.email,
+        table: prepared.tableId, field: parsed.field, assigneeMemberId: prepared.value,
+        rows: async () =>
+          (await db.select().from(drizzleTable).where(eq(idOf(drizzleTable), parsed.id))) as Record<string, unknown>[],
+      })
+    }
 
     revalidatePath('/', 'layout')
     return { ok: true }
@@ -345,13 +360,24 @@ export async function bulkUpdateCell(input: z.infer<typeof bulkCellSchema>): Pro
 
     const prepared = prepareCellWrite(parsed.table, parsed.field, parsed.value)
     if (!prepared.ok) return prepared
-    await requirePermission(prepared.tableId, 'edit')
+    const member = await requirePermission(prepared.tableId, 'edit')
 
     const drizzleTable = TABLE_TO_DRIZZLE[prepared.tableId]
     await db
       .update(drizzleTable)
       .set({ [prepared.column]: prepared.value } as never)
       .where(inArray(idOf(drizzleTable), parsed.ids))
+
+    // A bulk hand-over is one email naming the batch, not one per row. The
+    // fetch rides as a thunk for the same reason as updateCell's.
+    if (typeof prepared.value === 'string' && prepared.value && assignmentPhrase(prepared.tableId, parsed.field)) {
+      await notifyAssignment({
+        actorMemberId: member.memberId, actorEmail: member.email,
+        table: prepared.tableId, field: parsed.field, assigneeMemberId: prepared.value,
+        rows: async () =>
+          (await db.select().from(drizzleTable).where(inArray(idOf(drizzleTable), parsed.ids))) as Record<string, unknown>[],
+      })
+    }
 
     revalidatePath('/', 'layout')
     const n = parsed.ids.length
@@ -416,7 +442,7 @@ export async function moveDealStage(input: z.infer<typeof stageSchema>): Promise
     if (deal.stage === toStage) return { ok: true }
 
     const closing = toStage === 'ClosedWon' || toStage === 'ClosedLost'
-    let handoff: string | null = null
+    let handoff: HandoffResult | null = null
 
     await db.transaction(async (tx) => {
       await tx
@@ -459,8 +485,22 @@ export async function moveDealStage(input: z.infer<typeof stageSchema>): Promise
       }
     })
 
+    // Read through a local: the assignment happened inside the transaction
+    // callback, which TypeScript's narrowing cannot see.
+    const made = handoff as HandoffResult | null
+
+    // After the transaction, never inside it: an email is not worth a rollback,
+    // and a rollback must not have already sent an email.
+    if (made?.pmId && made.pmId !== memberId) {
+      await notifyAssignment({
+        actorMemberId: memberId, actorEmail: null,
+        table: 'projects', field: 'pmId', assigneeMemberId: made.pmId,
+        rows: [{ id: made.projectId, name: made.projectName }],
+      })
+    }
+
     revalidatePath('/', 'layout')
-    return { ok: true, detail: handoff ?? undefined }
+    return { ok: true, detail: made?.message }
   } catch (error) {
     return failure('moveDealStage', error, 'Stage change failed')
   }
@@ -474,15 +514,25 @@ export async function moveDealStage(input: z.infer<typeof stageSchema>): Promise
  */
 export async function runHandoff(dealId: string): Promise<ActionResult> {
   try {
-    await requirePermission('deals', 'edit')
-    let detail: string | null = null
+    const { memberId } = await requirePermission('deals', 'edit')
+    let handoff: HandoffResult | null = null
     await db.transaction(async (tx) => {
-      detail = await spawnProjectForDeal(tx, dealId)
+      handoff = await spawnProjectForDeal(tx, dealId)
     })
+    // Read through a local: the closure assignment defeats TS narrowing.
+    const made = handoff as HandoffResult | null
+    if (!made) {
+      return { ok: false, error: 'Nothing to create — the deal already has a project, or it sells no delivery work.' }
+    }
+    if (made.pmId && made.pmId !== memberId) {
+      await notifyAssignment({
+        actorMemberId: memberId, actorEmail: null,
+        table: 'projects', field: 'pmId', assigneeMemberId: made.pmId,
+        rows: [{ id: made.projectId, name: made.projectName }],
+      })
+    }
     revalidatePath('/', 'layout')
-    return detail
-      ? { ok: true, detail }
-      : { ok: false, error: 'Nothing to create — the deal already has a project, or it sells no delivery work.' }
+    return { ok: true, detail: made.message }
   } catch (error) {
     return failure('runHandoff', error, 'Handoff failed')
   }
@@ -597,7 +647,7 @@ export async function createDeal(input: z.infer<typeof newDealSchema>): Promise<
         type: data.type,
         expectedCloseDate: data.expectedCloseDate ?? null,
       })
-      .returning({ id: t.deals.id })
+      .returning({ id: t.deals.id, name: t.deals.name, ownerId: t.deals.ownerId })
 
     await db.insert(t.dealStageHistory).values({
       dealId: deal.id,
@@ -605,6 +655,14 @@ export async function createDeal(input: z.infer<typeof newDealSchema>): Promise<
       toStage: 'Qualifying',
       changedById: memberId,
     })
+
+    if (deal.ownerId && deal.ownerId !== memberId) {
+      await notifyAssignment({
+        actorMemberId: memberId, actorEmail: null,
+        table: 'deals', field: 'ownerId', assigneeMemberId: deal.ownerId,
+        rows: [deal as unknown as Record<string, unknown>],
+      })
+    }
 
     revalidatePath('/', 'layout')
     return { ok: true }
@@ -929,6 +987,20 @@ export async function createRecord(input: z.infer<typeof createSchema>): Promise
     const [created] = await db.insert(drizzleTable).values(ruled.row as never).returning()
 
     await recordAudit(member, 'create', config.id, [created as Record<string, unknown>])
+
+    // A record born assigned to somebody else emails them — the quick-add in a
+    // meeting is exactly "you, by Friday", and Friday should not be a surprise.
+    for (const field of Object.keys(ASSIGNMENT_FIELDS[config.id] ?? {})) {
+      const assignee = (created as Record<string, unknown>)[field]
+      if (typeof assignee === 'string' && assignee) {
+        await notifyAssignment({
+          actorMemberId: member.memberId, actorEmail: member.email,
+          table: config.id, field, assigneeMemberId: assignee,
+          rows: [created as Record<string, unknown>],
+        })
+      }
+    }
+
     revalidatePath('/', 'layout')
 
     return {
