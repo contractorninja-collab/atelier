@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { renewSubscription } from '@/server/actions'
+import { attempt } from '@/lib/attempt'
 
 /**
  * Records a renewal from the dashboard, which is where you notice one is due.
@@ -38,7 +39,7 @@ export function RenewButton({ id, label }: { id: string; label: string }) {
         e.preventDefault()
         e.stopPropagation()
         startTransition(async () => {
-          const r = await renewSubscription(id)
+          const r = await attempt(() => renewSubscription(id))
           setResult(r.ok ? { ok: true, text: r.detail ?? 'Renewed' } : { ok: false, text: r.error })
           if (r.ok) router.refresh()
         })

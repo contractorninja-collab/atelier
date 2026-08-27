@@ -11,6 +11,7 @@ import { updateMyProfile } from '@/server/actions'
 import { TABLES } from '@/lib/tables'
 import { ROW_HEIGHTS, type ThemeChoice } from '@/lib/prefs'
 import type { MyProfile } from '@/server/queries'
+import { attempt } from '@/lib/attempt'
 
 export type SettingsSection = 'profile' | 'preferences' | 'account'
 
@@ -118,7 +119,7 @@ function ProfileSection({ profile }: { profile: MyProfile | null }) {
   const save = () => {
     setError(null)
     startTransition(async () => {
-      const result = await updateMyProfile({
+      const result = await attempt(() => updateMyProfile({
         name: form.name,
         role: form.role,
         department: form.department,
@@ -127,7 +128,7 @@ function ProfileSection({ profile }: { profile: MyProfile | null }) {
         timezone: form.timezone.trim() || null,
         squad: form.squad.trim() || null,
         startDate: form.startDate || null,
-      })
+      }))
       if (!result.ok) {
         setError(result.error)
         return

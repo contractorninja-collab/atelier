@@ -86,6 +86,18 @@ function makeDb() {
       idle_timeout: 10,
       max_lifetime: 60 * 5,
       connect_timeout: 10,
+      /**
+       * No query gets to hang.
+       *
+       * connect_timeout only covers opening a socket. A query queued on a
+       * connection the pooler has silently wedged waits forever, the page
+       * waits with it, and the person sees a spinner that never resolves —
+       * Vercel kills the function at twenty seconds, which the browser
+       * experiences as "it goes forever". Fifteen seconds is far beyond any
+       * legitimate query here and comfortably inside the function limit, so
+       * the app gets to answer with an actual error instead of dying mid-render.
+       */
+      connection: { statement_timeout: 15_000 },
     })
   // Reused across hot reloads in dev; in production each instance is short-lived
   // and Vercel may freeze it, so caching a socket on globalThis is not safe.

@@ -4,6 +4,8 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { concludeMeeting, createRecord, resolveIssue, startMeeting, updateCell } from '@/server/actions'
 import { TODO_COMPLETION_BAR_BPS } from '@/server/compute'
+import { attempt } from '@/lib/attempt'
+import type { ActionResult } from '@/lib/types'
 
 /**
  * The interactive half of the meeting page.
@@ -19,10 +21,10 @@ function useAction() {
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
 
-  const run = (action: () => Promise<{ ok: boolean; error?: string }>) => {
+  const run = (action: () => Promise<ActionResult>) => {
     setError(null)
     startTransition(async () => {
-      const result = await action()
+      const result = await attempt(action)
       if (!result.ok) setError(result.error ?? 'Something went wrong')
       else router.refresh()
     })

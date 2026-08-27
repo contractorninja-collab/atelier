@@ -13,6 +13,7 @@ import { BulkBar } from './BulkBar'
 import { usePrefs } from './Prefs'
 import { bulkDelete, bulkUpdateCell, moveDealStage, moveTaskStatus, updateCell } from '@/server/actions'
 import { TABLES } from '@/lib/tables'
+import { attempt } from '@/lib/attempt'
 import type { CellValue, Field, LinkRef, Row, TableConfig, TableId } from '@/lib/types'
 
 type Props = {
@@ -153,12 +154,12 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
       )
 
       startTransition(async () => {
-        const result = await updateCell({
+        const result = await attempt(() => updateCell({
           table: config.id,
           id: rowId,
           field: field.id,
           value: value as string | number | boolean | null,
-        })
+        }))
         if (!result.ok) {
           setRows(previous)
           setToast({ text: result.error, error: true })
@@ -192,8 +193,8 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
 
       startTransition(async () => {
         const result = isDealStage
-          ? await moveDealStage({ dealId: rowId, toStage: toValue as never })
-          : await moveTaskStatus({ taskId: rowId, toStatus: toValue as never })
+          ? await attempt(() => moveDealStage({ dealId: rowId, toStage: toValue as never }))
+          : await attempt(() => moveTaskStatus({ taskId: rowId, toStatus: toValue as never }))
 
         if (!result.ok) {
           setRows(previous)
@@ -456,12 +457,12 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
       )
 
       startTransition(async () => {
-        const result = await bulkUpdateCell({
+        const result = await attempt(() => bulkUpdateCell({
           table: config.id,
           ids,
           field: field.id,
           value: value === '' ? null : value,
-        })
+        }))
         if (!result.ok) {
           setRows(previous)
           setToast({ text: result.error, error: true })
@@ -528,7 +529,7 @@ export function TableWorkspace({ config, rows: serverRows, lookups }: Props) {
     setSelected(new Set())
 
     startTransition(async () => {
-      const result = await bulkDelete({ table: config.id, ids })
+      const result = await attempt(() => bulkDelete({ table: config.id, ids }))
       if (!result.ok) {
         setRows(previous)
         setToast({ text: result.error, error: true })

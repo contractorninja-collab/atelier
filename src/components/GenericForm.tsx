@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { createRecord } from '@/server/actions'
+import { attempt } from '@/lib/attempt'
 import { CREATE_SPEC, TABLES } from '@/lib/tables'
 import type { ActionResult, Field, TableId } from '@/lib/types'
 
@@ -57,7 +58,7 @@ export function GenericForm({
     setError(null)
     setPending(true)
     void (async () => {
-      const result: ActionResult = await createRecord({ table, values: values as Record<string, string | boolean> })
+      const result: ActionResult = await attempt(() => createRecord({ table, values: values as Record<string, string | boolean> }))
       setPending(false)
       if (!result.ok) setError(result.error)
       else onDone(result.detail ?? `${config.singular} created`)

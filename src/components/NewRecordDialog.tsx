@@ -10,6 +10,7 @@ import {
 } from '@/server/actions'
 import { CREATE_SPEC, DEAL_STAGE_OPTIONS, TABLES, TARGET_METRIC_UNIT } from '@/lib/tables'
 import type { ActionResult, TableId } from '@/lib/types'
+import { attempt } from '@/lib/attempt'
 
 type Lookups = Record<string, { id: string; label: string }[]>
 
@@ -64,7 +65,7 @@ function useCreate(onDone: (message: string) => void) {
     e.preventDefault()
     setError(null)
     startTransition(async () => {
-      const result = await run()
+      const result = await attempt(run)
       if (!result.ok) {
         setError(result.error)
         return
