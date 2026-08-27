@@ -16,6 +16,19 @@ export default async function LoginPage({
   const { sent, error } = await searchParams
   const devLogin = process.env.ATELIER_DEV_LOGIN === 'true' && process.env.NODE_ENV !== 'production'
 
+  /**
+   * Say what actually failed. One hardcoded message here blamed the Team table
+   * for every error — including the mail service refusing to send, which reads
+   * as "you are not invited" to a person who very much is. Somebody stared at
+   * their own row in the grid because of this.
+   */
+  const errorMessage =
+    error === 'AccessDenied'
+      ? 'That address is not on the team yet. Ask an admin to add you to the Team table first.'
+      : error === 'EmailSignin'
+        ? 'You are on the team, but the sign-in email could not be sent — the mail service refused it. Tell an admin; this is a configuration problem, not something you did.'
+        : 'Sign-in failed for a technical reason. Try again, and tell an admin if it keeps happening.'
+
   return (
     <div className="login-wrap">
       <div className="login">
@@ -45,7 +58,7 @@ export default async function LoginPage({
               padding: '11px 13px', borderRadius: 8, fontSize: 12.5, marginBottom: 18, lineHeight: 1.5,
             }}
           >
-            That address is not on the team yet. Ask an admin to add you to the Team table first.
+            {errorMessage}
           </div>
         ) : null}
 
